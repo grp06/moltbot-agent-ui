@@ -45,6 +45,7 @@ export type GatewayResponseFrame = {
 export type ControlPlaneGatewaySettings = {
   url: string;
   token: string;
+  allowSelfSignedCerts?: boolean;
 };
 
 export type ControlPlaneRuntimeSnapshot = {

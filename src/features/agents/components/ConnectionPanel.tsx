@@ -11,6 +11,7 @@ type ConnectionPanelProps = {
   savedGatewayUrl: string;
   draftGatewayUrl: string;
   token: string;
+  allowSelfSignedCerts: boolean;
   hasStoredToken: boolean;
   localGatewayDefaults: StudioGatewaySettings | null;
   localGatewayDefaultsHasToken: boolean;
@@ -29,6 +30,7 @@ type ConnectionPanelProps = {
   disconnecting: boolean;
   onGatewayUrlChange: (value: string) => void;
   onTokenChange: (value: string) => void;
+  onAllowSelfSignedCertsChange: (value: boolean) => void;
   onSaveSettings: () => void;
   onTestConnection: () => void;
   onDisconnect: () => void;
@@ -39,6 +41,7 @@ export const ConnectionPanel = ({
   savedGatewayUrl,
   draftGatewayUrl,
   token,
+  allowSelfSignedCerts,
   hasStoredToken,
   localGatewayDefaults,
   localGatewayDefaultsHasToken,
@@ -52,6 +55,7 @@ export const ConnectionPanel = ({
   disconnecting,
   onGatewayUrlChange,
   onTokenChange,
+  onAllowSelfSignedCertsChange,
   onSaveSettings,
   onTestConnection,
   onDisconnect,
@@ -144,6 +148,27 @@ export const ConnectionPanel = ({
           />
         </label>
       </div>
+      
+      {/* Allow self-signed certificates checkbox */}
+      <div className="flex items-center gap-2">
+        <label className="flex cursor-pointer items-center gap-2 text-xs text-foreground/80">
+          <input
+            type="checkbox"
+            checked={allowSelfSignedCerts}
+            onChange={(event) => onAllowSelfSignedCertsChange(event.target.checked)}
+            className="h-4 w-4 rounded border-border text-primary focus:ring-2 focus:ring-primary/30 focus:ring-offset-0"
+          />
+          Allow self-signed certificates
+        </label>
+      </div>
+      
+      {allowSelfSignedCerts && (
+        <div className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400">
+          <span className="text-sm">⚠️</span>
+          <span>Self-signed certificates are enabled. Do not use in production.</span>
+        </div>
+      )}
+      
       <p className="text-xs text-muted-foreground">{tokenHelper}</p>
       {hasUnsavedChanges ? (
         <p className="font-mono text-[10px] font-semibold tracking-[0.06em] text-muted-foreground">

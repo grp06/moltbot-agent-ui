@@ -164,8 +164,13 @@ const mergeGatewaySettings = (
     : patchHasUrl && !sameGatewayUrl
       ? ""
       : current?.token ?? "";
+  const nextAllowSelfSignedCerts = hasOwn(patch, "allowSelfSignedCerts")
+    ? typeof patch.allowSelfSignedCerts === "boolean"
+      ? patch.allowSelfSignedCerts
+      : false
+    : current?.allowSelfSignedCerts ?? false;
   if (!nextUrl) return null;
-  return { url: nextUrl, token: nextToken };
+  return { url: nextUrl, token: nextToken, allowSelfSignedCerts: nextAllowSelfSignedCerts };
 };
 
 const normalizeFocused = (value: unknown): Record<string, StudioFocusedPreference> => {

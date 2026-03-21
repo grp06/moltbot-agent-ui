@@ -127,6 +127,7 @@ type StudioGatewaySettingsState = {
   gatewayUrl: string;
   draftGatewayUrl: string;
   token: string;
+  allowSelfSignedCerts: boolean;
   localGatewayDefaults: StudioGatewaySettings | null;
   localGatewayDefaultsHasToken: boolean;
   hasStoredToken: boolean;
@@ -150,6 +151,7 @@ type StudioGatewaySettingsState = {
   useLocalGatewayDefaults: () => void;
   setGatewayUrl: (value: string) => void;
   setToken: (value: string) => void;
+  setAllowSelfSignedCerts: (value: boolean) => void;
   applyRuntimeStatusEvent: (event: { status?: unknown; reason?: unknown } | null) => void;
   clearError: () => void;
 };
@@ -181,6 +183,7 @@ export const useStudioGatewaySettings = (
   const [gatewayUrl, setGatewayUrlState] = useState(DEFAULT_UPSTREAM_GATEWAY_URL);
   const [draftGatewayUrl, setDraftGatewayUrlState] = useState(DEFAULT_UPSTREAM_GATEWAY_URL);
   const [token, setTokenState] = useState("");
+  const [allowSelfSignedCerts, setAllowSelfSignedCertsState] = useState(false);
   const [localGatewayDefaults, setLocalGatewayDefaults] = useState<StudioGatewaySettings | null>(
     null
   );
@@ -277,7 +280,9 @@ export const useStudioGatewaySettings = (
       const settings = envelope.settings ?? null;
       const gateway = settings?.gateway ?? null;
       const nextUrl = gateway?.url?.trim() ? gateway.url : DEFAULT_UPSTREAM_GATEWAY_URL;
+      const nextAllowSelfSignedCerts = gateway?.allowSelfSignedCerts === true;
       setGatewayUrlState(nextUrl);
+      setAllowSelfSignedCertsState(nextAllowSelfSignedCerts);
       setHasStoredToken(Boolean(envelope.gatewayMeta?.hasStoredToken));
       setGatewayCredentialScope(readString(envelope.gatewayMeta?.credentialScope));
       setLocalGatewayDefaults(normalizeLocalGatewayDefaults(envelope.localGatewayDefaults));
@@ -354,8 +359,8 @@ export const useStudioGatewaySettings = (
       await settingsCoordinator.flushPending();
       const patch: StudioSettingsPatch = {
         gateway: trimmedToken
-          ? { url: trimmedGatewayUrl, token: trimmedToken }
-          : { url: trimmedGatewayUrl },
+          ? { url: trimmedGatewayUrl, token: trimmedToken, allowSelfSignedCerts }
+          : { url: trimmedGatewayUrl, allowSelfSignedCerts },
       };
       const envelope = await fetchJson<StudioSettingsResponse>("/api/studio", {
         method: "PUT",
@@ -411,6 +416,7 @@ export const useStudioGatewaySettings = (
           gateway: {
             url: trimmedGatewayUrl,
             token: token.trim(),
+            allowSelfSignedCerts: allowSelfSignedCerts,
           },
           useStoredToken: token.trim().length === 0,
         }),
@@ -497,10 +503,20 @@ export const useStudioGatewaySettings = (
     []
   );
 
+  const setAllowSelfSignedCerts = useCallback(
+    (value: boolean) => {
+      setAllowSelfSignedCertsState(value);
+      setActionError(null);
+      setTestResult(null);
+    },
+    []
+  );
+
   const useLocalGatewayDefaults = useCallback(() => {
     if (!localGatewayDefaults) return;
     setDraftGatewayUrlState(localGatewayDefaults.url);
     setTokenState("");
+    setAllowSelfSignedCertsState(localGatewayDefaults.allowSelfSignedCerts === true);
     setActionError(null);
     setTestResult(null);
   }, [localGatewayDefaults]);
@@ -517,6 +533,7 @@ export const useStudioGatewaySettings = (
       gatewayUrl,
       draftGatewayUrl,
       token,
+      allowSelfSignedCerts,
       localGatewayDefaults,
       localGatewayDefaultsHasToken,
       hasStoredToken,
@@ -535,10 +552,12 @@ export const useStudioGatewaySettings = (
       useLocalGatewayDefaults,
       setGatewayUrl,
       setToken,
+      setAllowSelfSignedCerts,
       applyRuntimeStatusEvent,
       clearError,
     }),
     [
+      allowSelfSignedCerts,
       applyRuntimeStatusEvent,
       clearError,
       disconnect,
@@ -555,6 +574,7 @@ export const useStudioGatewaySettings = (
       saveSettings,
       saving,
       disconnecting,
+      setAllowSelfSignedCerts,
       setGatewayUrl,
       setToken,
       status,
