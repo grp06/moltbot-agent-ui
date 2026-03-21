@@ -213,6 +213,7 @@ describe("studio settings normalization", () => {
     expect(merged.gateway).toEqual({
       url: "ws://localhost:18789",
       token: "secret-token",
+      allowSelfSignedCerts: false,
     });
   });
 

@@ -148,7 +148,7 @@ export const ConnectionPanel = ({
           />
         </label>
       </div>
-      
+
       {/* Allow self-signed certificates checkbox */}
       <div className="flex items-center gap-2">
         <label className="flex cursor-pointer items-center gap-2 text-xs text-foreground/80">
@@ -161,14 +161,16 @@ export const ConnectionPanel = ({
           Allow self-signed certificates
         </label>
       </div>
-      
+
       {allowSelfSignedCerts && (
-        <div className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400">
-          <span className="text-sm">⚠️</span>
-          <span>Self-signed certificates are enabled. Do not use in production.</span>
+        <div className="ui-alert-danger rounded-md px-3 py-2 text-xs">
+          <div className="flex items-center gap-1.5">
+            <span className="text-sm">⚠️</span>
+            <span>Self-signed certificates are enabled. Do not use in production.</span>
+          </div>
         </div>
       )}
-      
+
       <p className="text-xs text-muted-foreground">{tokenHelper}</p>
       {hasUnsavedChanges ? (
         <p className="font-mono text-[10px] font-semibold tracking-[0.06em] text-muted-foreground">

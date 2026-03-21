@@ -1,11 +1,13 @@
 export type StudioGatewaySettings = {
   url: string;
   token: string;
+  allowSelfSignedCerts?: boolean;
 };
 
 type StudioGatewaySettingsPatch = {
   url?: string | null;
   token?: string | null;
+  allowSelfSignedCerts?: boolean | null;
 };
 
 type FocusFilter = "all" | "running" | "approvals";
@@ -141,7 +143,8 @@ const normalizeGatewaySettings = (value: unknown): StudioGatewaySettings | null 
   const url = normalizeGatewayUrl(value.url);
   if (!url) return null;
   const token = coerceString(value.token);
-  return { url, token };
+  const allowSelfSignedCerts = value.allowSelfSignedCerts === true;
+  return { url, token, allowSelfSignedCerts };
 };
 
 const hasOwn = (value: Record<string, unknown>, key: string) =>

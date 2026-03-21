@@ -93,11 +93,11 @@ export function buildGatewayConnectProfile(args: {
   };
 
   const socketOptions: GatewaySocketOptions = {};
-  
+
   if (args.profileId === "legacy-control-ui") {
     socketOptions.origin = resolveOriginForUpstream(args.upstreamUrl);
   }
-  
+
   if (args.rejectUnauthorized === false) {
     socketOptions.rejectUnauthorized = false;
   }
