@@ -26,6 +26,19 @@ Why this matters:
 
 OpenClaw adds product-specific metadata under `metadata.openclaw` (install specs, gating fields, primary env key, etc.) while keeping the base skill shape compatible.
 
+### Concrete external skill example
+
+[TweetClaw](https://github.com/Xquik-dev/tweetclaw) is a ClawHub-listed OpenClaw plugin that also ships a `SKILL.md`. It is useful as a high-signal test case for the Studio Skills UX because it has install state, gateway-wide setup state, and per-agent access scope.
+
+- Install path: `openclaw plugins install @xquik/tweetclaw`
+- Package source: [`@xquik/tweetclaw`](https://www.npmjs.com/package/@xquik/tweetclaw)
+- Discovery page: [ClawHub TweetClaw listing](https://clawhub.ai/plugins/@xquik/tweetclaw)
+- Runtime tools: `explore` for endpoint discovery and optional `tweetclaw` for structured API calls
+- Readiness checks: Xquik API key or MPP signing key config, plus optional dependencies for MPP mode
+- User workflows: search tweets, search tweet replies, post tweets, post tweet replies, follower export, user lookup, media upload/download, direct messages, monitor tweets, webhooks, and giveaway draws
+
+In Studio, the Skills tab should answer: can this agent use TweetClaw? The System setup surface should answer: is TweetClaw installed, configured, and ready for all agents?
+
 ## 3) Skill object model
 
 A skill is loaded from a directory containing `SKILL.md` with frontmatter.
