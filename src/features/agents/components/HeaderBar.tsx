@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { ThemeToggle } from "@/components/theme-toggle";
 import type { GatewayStatus } from "@/lib/gateway/gateway-status";
-import { Plug } from "lucide-react";
+import { Plug, GitCompareArrows } from "lucide-react";
 import { resolveGatewayStatusBadgeClass, resolveGatewayStatusLabel } from "./colorSemantics";
 
 type HeaderBarProps = {
@@ -52,6 +53,14 @@ export const HeaderBar = ({
             {resolveGatewayStatusLabel(status)}
           </span>
           <ThemeToggle />
+          <Link
+            href="/compare"
+            className="ui-btn-icon ui-btn-icon-xs"
+            aria-label="Compare agents"
+            data-testid="compare-agents-link"
+          >
+            <GitCompareArrows className="h-3.5 w-3.5" />
+          </Link>
           {showConnectionSettings ? (
             <div className="relative z-[210]" ref={menuRef}>
               <button

@@ -69,3 +69,6 @@ test-results
 
 # bv (beads viewer) local config and caches
 .bv/
+
+studio.err.log
+studio.log
