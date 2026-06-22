@@ -82,7 +82,7 @@ export function buildGatewayConnectProfile(args: {
   capabilities: string[];
 }): GatewayConnectProfile {
   const baseParams = {
-    minProtocol: args.protocol,
+    minProtocol: 3,
     maxProtocol: args.protocol,
     role: "operator" as const,
     scopes: [...OPERATOR_SCOPES],
