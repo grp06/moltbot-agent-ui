@@ -1,4 +1,5 @@
 import type { AgentFileName } from "@/lib/agents/agentFiles";
+import { WIDGET_PROMPT } from "@/features/agents/components/widgets/widgetPromptSnippet";
 
 export type PersonalityBuilderDraft = {
   identity: {
@@ -294,6 +295,59 @@ export const parsePersonalityFiles = (files: AgentFilesInput): PersonalityBuilde
   return draft;
 };
 
+/**
+ * Idempotency sentinel — the unique opening sentence of `WIDGET_PROMPT`.
+ *
+ * CONTEXT.md D-03 originally specified the literal `[WIDGETS]` as the
+ * sentinel, but Phase 1's published `WIDGET_PROMPT` constant does not
+ * contain that token. We instead lock onto the prompt's first sentence,
+ * which is distinctive enough that no real agent tools file would
+ * coincidentally contain it. Plus, the sentinel is derived from the
+ * prompt itself: a future change to that sentence will tighten the
+ * contract automatically (the helper will see the new opening present
+ * in `existing` after one compose round-trip and skip).
+ *
+ * If a later phase introduces a true `[WIDGETS]` heading inside
+ * `WIDGET_PROMPT`, swap this constant to the literal token without
+ * touching the rest of the helper.
+ */
+const WIDGET_PROMPT_SENTINEL =
+  "You can render rich, sandboxed inline HTML in chat by emitting a <widget> tag.";
+
+/**
+ * Append the widget capability prompt to a TOOLS.md compose output.
+ *
+ * Per CONTEXT.md (Phase 3) D-01..D-05:
+ * - Default ON for all agents (D-02 — no per-agent toggle in v1)
+ * - Idempotent on the unique opening sentence of `WIDGET_PROMPT`
+ *   (see WIDGET_PROMPT_SENTINEL above). An agent whose stored TOOLS.md
+ *   already contains the snippet (manually pasted, or returned by an
+ *   earlier compose round-trip into storage) will not double-inject.
+ * - Append happens at compose time only — the stored TOOLS.md content
+ *   stays clean (D-04). Turning off widgets later means removing this
+ *   append; no migration needed.
+ * - Snippet lands at the END of TOOLS.md content (D-05). Widget capability
+ *   is conceptually one more tool the agent has access to.
+ *
+ * @internal — exported only so the unit test file can exercise it directly
+ *   without going through the full `serializePersonalityFiles` round-trip.
+ */
+export const composeToolsContentWithWidgetPrompt = (existing: string): string => {
+  if (existing.includes(WIDGET_PROMPT_SENTINEL)) {
+    return existing;
+  }
+  if (existing.length === 0) {
+    return WIDGET_PROMPT;
+  }
+  // Strip trailing newlines from `existing` (if present) before joining with
+  // the canonical `\n\n` separator. This avoids producing three-or-more
+  // consecutive newlines when the stored TOOLS.md ends with its own newline.
+  const normalized = existing.endsWith("\n")
+    ? existing.replace(/\n+$/, "")
+    : existing;
+  return `${normalized}\n\n${WIDGET_PROMPT}`;
+};
+
 export const serializePersonalityFiles = (
   draft: PersonalityBuilderDraft
 ): Record<AgentFileName, string> => ({
@@ -301,7 +355,7 @@ export const serializePersonalityFiles = (
   "SOUL.md": serializeSoulMarkdown(draft.soul),
   "IDENTITY.md": serializeIdentityMarkdown(draft.identity),
   "USER.md": serializeUserMarkdown(draft.user),
-  "TOOLS.md": draft.tools,
+  "TOOLS.md": composeToolsContentWithWidgetPrompt(draft.tools),
   "HEARTBEAT.md": draft.heartbeat,
   "MEMORY.md": draft.memory,
 });

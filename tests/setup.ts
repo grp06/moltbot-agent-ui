@@ -42,3 +42,21 @@ const ensureLocalStorage = () => {
 };
 
 ensureLocalStorage();
+
+const ensureResizeObserver = () => {
+  if (typeof globalThis === "undefined") return;
+  const existing = (globalThis as { ResizeObserver?: unknown }).ResizeObserver;
+  if (typeof existing === "function") return;
+  class ResizeObserverShim {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+  Object.defineProperty(globalThis, "ResizeObserver", {
+    value: ResizeObserverShim,
+    configurable: true,
+    writable: true,
+  });
+};
+
+ensureResizeObserver();

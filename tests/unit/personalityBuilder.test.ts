@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import { WIDGET_PROMPT } from "@/features/agents/components/widgets/widgetPromptSnippet";
 import { createAgentFilesState } from "@/lib/agents/agentFiles";
 import {
+  composeToolsContentWithWidgetPrompt,
   parsePersonalityFiles,
   serializePersonalityFiles,
   type PersonalityBuilderDraft,
@@ -183,8 +185,144 @@ describe("personalityBuilder", () => {
     );
 
     expect(files["AGENTS.md"]).toBe("Top-level operating rules.");
-    expect(files["TOOLS.md"]).toBe("Tool conventions.");
+    expect(files["TOOLS.md"]).toBe(`Tool conventions.\n\n${WIDGET_PROMPT}`);
     expect(files["HEARTBEAT.md"]).toBe("Heartbeat notes.");
     expect(files["MEMORY.md"]).toBe("Durable memory.");
+  });
+});
+
+describe("personalityBuilder WIDGET_PROMPT injection (PROMPT-02)", () => {
+  it("appends WIDGET_PROMPT to TOOLS.md content when not already present", () => {
+    const result = composeToolsContentWithWidgetPrompt("Existing tool guidance.");
+    expect(result.startsWith("Existing tool guidance.")).toBe(true);
+    expect(result.endsWith(WIDGET_PROMPT)).toBe(true);
+    expect(result).toBe(`Existing tool guidance.\n\n${WIDGET_PROMPT}`);
+  });
+
+  it("returns input unchanged when WIDGET_PROMPT sentinel already present", () => {
+    // The sentinel is the unique opening sentence of WIDGET_PROMPT — if the
+    // stored TOOLS.md already contains it, the helper must not re-append.
+    const existing = `Some tools.\n\n${WIDGET_PROMPT}`;
+    const result = composeToolsContentWithWidgetPrompt(existing);
+    expect(result).toBe(existing);
+  });
+
+  it("returns WIDGET_PROMPT alone when input is empty", () => {
+    const result = composeToolsContentWithWidgetPrompt("");
+    expect(result).toBe(WIDGET_PROMPT);
+  });
+
+  it("collapses a single trailing newline before the separator", () => {
+    const result = composeToolsContentWithWidgetPrompt("trailing newline\n");
+    expect(result).toBe(`trailing newline\n\n${WIDGET_PROMPT}`);
+  });
+
+  it("collapses multiple trailing newlines to the canonical separator", () => {
+    const result = composeToolsContentWithWidgetPrompt("trailing\n\n\n");
+    expect(result).toBe(`trailing\n\n${WIDGET_PROMPT}`);
+  });
+
+  it("serializePersonalityFiles emits TOOLS.md with WIDGET_PROMPT appended", () => {
+    const draft: PersonalityBuilderDraft = {
+      identity: { name: "", creature: "", vibe: "", emoji: "", avatar: "" },
+      user: {
+        name: "",
+        callThem: "",
+        pronouns: "",
+        timezone: "",
+        notes: "",
+        context: "",
+      },
+      soul: { coreTruths: "", boundaries: "", vibe: "", continuity: "" },
+      agents: "",
+      tools: "Tool conventions.",
+      heartbeat: "",
+      memory: "",
+    };
+
+    const files = serializePersonalityFiles(draft);
+
+    expect(files["TOOLS.md"]).toContain("Tool conventions.");
+    expect(files["TOOLS.md"]).toContain(
+      "You can render rich, sandboxed inline HTML in chat by emitting a <widget> tag.",
+    );
+    expect(files["TOOLS.md"]).toBe(`Tool conventions.\n\n${WIDGET_PROMPT}`);
+  });
+
+  it("serializePersonalityFiles is idempotent when draft.tools already contains the WIDGET_PROMPT sentinel", () => {
+    const seeded = `Seeded text.\n\n${WIDGET_PROMPT}`;
+    const draft: PersonalityBuilderDraft = {
+      identity: { name: "", creature: "", vibe: "", emoji: "", avatar: "" },
+      user: {
+        name: "",
+        callThem: "",
+        pronouns: "",
+        timezone: "",
+        notes: "",
+        context: "",
+      },
+      soul: { coreTruths: "", boundaries: "", vibe: "", continuity: "" },
+      agents: "",
+      tools: seeded,
+      heartbeat: "",
+      memory: "",
+    };
+
+    const files = serializePersonalityFiles(draft);
+
+    expect(files["TOOLS.md"]).toBe(seeded);
+    // Counting occurrences of the prompt sentinel: must remain exactly 1.
+    const sentinel =
+      "You can render rich, sandboxed inline HTML in chat by emitting a <widget> tag.";
+    const occurrences = files["TOOLS.md"].split(sentinel).length - 1;
+    expect(occurrences).toBe(1);
+  });
+
+  it("parsePersonalityFiles reads stored TOOLS.md content verbatim (D-04 storage stays clean)", () => {
+    // The agent's stored TOOLS.md file does NOT contain the widget prompt —
+    // only the composed wire output does. parsePersonalityFiles reads the
+    // file content raw and must continue returning that raw content
+    // untouched, so the editor UI shows the agent's clean tools file.
+    const files = createAgentFilesState();
+    files["TOOLS.md"] = { exists: true, content: "Stored tool docs without widgets." };
+
+    const draft = parsePersonalityFiles(files);
+
+    expect(draft.tools).toBe("Stored tool docs without widgets.");
+    expect(draft.tools).not.toContain(
+      "You can render rich, sandboxed inline HTML in chat by emitting a <widget> tag.",
+    );
+  });
+
+  it("does not modify other AgentFileName fields on the serialize output", () => {
+    const draft: PersonalityBuilderDraft = {
+      identity: { name: "Nova", creature: "fox", vibe: "calm", emoji: "🦊", avatar: "" },
+      user: {
+        name: "GP",
+        callThem: "GP",
+        pronouns: "he/him",
+        timezone: "UTC",
+        notes: "",
+        context: "",
+      },
+      soul: { coreTruths: "Be direct.", boundaries: "", vibe: "", continuity: "" },
+      agents: "Top-level agents content.",
+      tools: "Tool conventions.",
+      heartbeat: "Heartbeat content.",
+      memory: "Memory content.",
+    };
+
+    const files = serializePersonalityFiles(draft);
+
+    expect(files["AGENTS.md"]).toBe("Top-level agents content.");
+    expect(files["HEARTBEAT.md"]).toBe("Heartbeat content.");
+    expect(files["MEMORY.md"]).toBe("Memory content.");
+    // IDENTITY/SOUL/USER are formatted markdown — assert they do not contain
+    // the widget prompt sentinel (the append must be confined to TOOLS.md alone).
+    const widgetSentinel =
+      "You can render rich, sandboxed inline HTML in chat by emitting a <widget> tag.";
+    for (const fileName of ["IDENTITY.md", "USER.md", "SOUL.md", "AGENTS.md", "HEARTBEAT.md", "MEMORY.md"] as const) {
+      expect(files[fileName]).not.toContain(widgetSentinel);
+    }
   });
 });

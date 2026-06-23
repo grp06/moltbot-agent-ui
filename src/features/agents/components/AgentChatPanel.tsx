@@ -17,6 +17,7 @@ import remarkGfm from "remark-gfm";
 import { Check, ChevronRight, Clock, Cog, Maximize2, Pencil, Shuffle, Trash2, X } from "lucide-react";
 import type { GatewayModelChoice } from "@/lib/gateway/models";
 import { rewriteMediaLinesToMarkdown } from "@/lib/text/media-markdown";
+import { AssistantMarkdownContent } from "@/features/agents/components/widgets/AssistantMarkdownContent";
 import { normalizeAssistantDisplayText } from "@/lib/text/assistantText";
 import { isNearBottom } from "@/lib/dom";
 import { AgentAvatar } from "./AgentAvatar";
@@ -503,17 +504,11 @@ const AssistantMessageCard = memo(function AssistantMessageCard({
                       );
                     }
                     return (
-                      <div className="agent-markdown text-foreground">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{rewritten}</ReactMarkdown>
-                      </div>
+                      <AssistantMarkdownContent text={contentText} isStreaming={true} />
                     );
                   })()
                 ) : (
-                  <div className="agent-markdown text-foreground">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                      {rewriteMediaLinesToMarkdown(contentText)}
-                    </ReactMarkdown>
-                  </div>
+                  <AssistantMarkdownContent text={contentText} isStreaming={false} />
                 )}
               </div>
             ) : null}
