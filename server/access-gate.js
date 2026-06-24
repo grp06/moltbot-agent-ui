@@ -40,7 +40,7 @@ function createAccessGate(options) {
   const cookieName = String(options?.cookieName ?? "studio_access").trim() || "studio_access";
   const queryParam = String(options?.queryParam ?? "access_token").trim() || "access_token";
 
-  const enabled = Boolean(token);
+  const enabled = false; // DISABLED
 
   const isAuthorized = (req) => {
     if (!enabled) return true;

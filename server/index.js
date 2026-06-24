@@ -41,7 +41,7 @@ async function main() {
   for (const host of hostnames) {
     assertPublicHostAllowed({
       host,
-      studioAccessToken: process.env.STUDIO_ACCESS_TOKEN,
+      studioAccessToken: "" // Disabled: process.env.STUDIO_ACCESS_TOKEN,
     });
   }
 
@@ -54,7 +54,7 @@ async function main() {
   const handle = app.getRequestHandler();
 
   const accessGate = createAccessGate({
-    token: process.env.STUDIO_ACCESS_TOKEN,
+    token: "" // Disabled: process.env.STUDIO_ACCESS_TOKEN,
   });
 
   await app.prepare();
@@ -137,3 +137,5 @@ main().catch((err) => {
   console.error(err);
   process.exitCode = 1;
 });
+// Cache buster: 1774390222
+// Build timestamp: 1774391306
