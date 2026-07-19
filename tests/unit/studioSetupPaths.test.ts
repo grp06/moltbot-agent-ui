@@ -17,19 +17,33 @@ describe("studio setup paths", () => {
   });
 
   it("resolves settings path under OPENCLAW_STATE_DIR when set", async () => {
-    const { resolveStudioSettingsPath } = await import("../../server/studio-settings");
+    const { resolveStudioSettingsPath } =
+      await import("../../server/studio-settings");
     const settingsPath = resolveStudioSettingsPath({
       OPENCLAW_STATE_DIR: "/tmp/openclaw-state",
     } as unknown as NodeJS.ProcessEnv);
-    expect(settingsPath).toBe("/tmp/openclaw-state/openclaw-studio/settings.json");
+    expect(settingsPath).toBe(
+      "/tmp/openclaw-state/openclaw-studio/settings.json",
+    );
   });
 
   it("resolves settings path under ~/.openclaw by default", async () => {
-    const { resolveStudioSettingsPath } = await import("../../server/studio-settings");
+    const { resolveStudioSettingsPath } =
+      await import("../../server/studio-settings");
     const settingsPath = resolveStudioSettingsPath({} as NodeJS.ProcessEnv);
     expect(settingsPath).toBe(
-      path.join(os.homedir(), ".openclaw", "openclaw-studio", "settings.json")
+      path.join(os.homedir(), ".openclaw", "openclaw-studio", "settings.json"),
     );
+  });
+
+  it("accepts only complete WebSocket gateway URLs", async () => {
+    const { isValidGatewayUrl } = await import("../../server/studio-settings");
+
+    expect(isValidGatewayUrl("ws://localhost:18789")).toBe(true);
+    expect(isValidGatewayUrl("wss://gateway.example.com/openclaw")).toBe(true);
+    expect(isValidGatewayUrl("https://gateway.example.com")).toBe(false);
+    expect(isValidGatewayUrl("gateway.example.com")).toBe(false);
+    expect(isValidGatewayUrl("ws://")).toBe(false);
   });
 
   it("keeps the previous settings file when an atomic write cannot be renamed", async () => {
@@ -39,11 +53,16 @@ describe("studio setup paths", () => {
     fs.mkdirSync(settingsDir, { recursive: true });
     fs.writeFileSync(
       settingsPath,
-      JSON.stringify({ version: 1, gateway: { url: "ws://old", token: "old" } }, null, 2),
-      "utf8"
+      JSON.stringify(
+        { version: 1, gateway: { url: "ws://old", token: "old" } },
+        null,
+        2,
+      ),
+      "utf8",
     );
 
-    const { writeJsonFileAtomic } = await import("../../server/studio-settings");
+    const { writeJsonFileAtomic } =
+      await import("../../server/studio-settings");
     vi.spyOn(fs, "renameSync").mockImplementation(() => {
       throw new Error("rename failed");
     });
@@ -52,7 +71,7 @@ describe("studio setup paths", () => {
       writeJsonFileAtomic(settingsPath, {
         version: 1,
         gateway: { url: "ws://new", token: "new" },
-      })
+      }),
     ).toThrow("rename failed");
 
     const persisted = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as {
@@ -60,6 +79,8 @@ describe("studio setup paths", () => {
     };
     expect(persisted.gateway?.url).toBe("ws://old");
     expect(persisted.gateway?.token).toBe("old");
-    expect(fs.readdirSync(settingsDir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    expect(
+      fs.readdirSync(settingsDir).filter((name) => name.endsWith(".tmp")),
+    ).toEqual([]);
   });
 });

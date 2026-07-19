@@ -2,7 +2,11 @@ const fs = require("node:fs");
 const { execFileSync } = require("node:child_process");
 const readline = require("node:readline/promises");
 
-const { resolveStudioSettingsPath, writeJsonFileAtomic } = require("../server/studio-settings");
+const {
+  isValidGatewayUrl,
+  resolveStudioSettingsPath,
+  writeJsonFileAtomic,
+} = require("../server/studio-settings");
 
 const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
 
@@ -14,10 +18,14 @@ const parseArgs = (argv) => {
 
 const tryReadGatewayTokenFromOpenclawCli = () => {
   try {
-    const raw = execFileSync("openclaw", ["config", "get", "gateway.auth.token"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
+    const raw = execFileSync(
+      "openclaw",
+      ["config", "get", "gateway.auth.token"],
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    );
     const token = String(raw ?? "").trim();
     return token || null;
   } catch {
@@ -32,7 +40,7 @@ async function main() {
 
   if (fs.existsSync(settingsPath) && !args.force) {
     console.error(
-      `Studio settings already exist at ${settingsPath}. Re-run with --force to overwrite.`
+      `Studio settings already exist at ${settingsPath}. Re-run with --force to overwrite.`,
     );
     process.exitCode = 1;
     return;
@@ -45,11 +53,13 @@ async function main() {
 
   try {
     const urlAnswer = await rl.question(
-      `Upstream Gateway URL [${DEFAULT_GATEWAY_URL}]: `
+      `Upstream Gateway URL [${DEFAULT_GATEWAY_URL}]: `,
     );
     const gatewayUrl = (urlAnswer || DEFAULT_GATEWAY_URL).trim();
-    if (!gatewayUrl) {
-      throw new Error("Gateway URL is required.");
+    if (!isValidGatewayUrl(gatewayUrl)) {
+      throw new Error(
+        "Gateway URL must use ws:// or wss:// and include a hostname.",
+      );
     }
 
     const tokenDefault = tryReadGatewayTokenFromOpenclawCli();
@@ -60,7 +70,7 @@ async function main() {
     const token = (tokenAnswer || tokenDefault || "").trim();
     if (!token) {
       throw new Error(
-        "Gateway token is required. Provide it, or install/openclaw so it can be auto-detected."
+        "Gateway token is required. Provide it, or install/openclaw so it can be auto-detected.",
       );
     }
 
