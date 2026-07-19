@@ -96,6 +96,45 @@ describe("execApprovalEvents", () => {
     expect(parseExecApprovalRequested(event)).toBeNull();
   });
 
+  it("drops unsafe agent ids and malformed agent session keys from requested payloads", () => {
+    const event: EventFrame = {
+      type: "event",
+      event: "exec.approval.requested",
+      payload: {
+        id: "approval-1",
+        request: {
+          command: "npm run test",
+          cwd: "/repo",
+          host: "gateway",
+          security: "allowlist",
+          ask: "always",
+          agentId: "../agent-1",
+          resolvedPath: "/bin/npm",
+          sessionKey: "agent:../agent-1:main",
+        },
+        createdAtMs: 123,
+        expiresAtMs: 456,
+      },
+    };
+
+    expect(parseExecApprovalRequested(event)).toEqual({
+      id: "approval-1",
+      request: {
+        command: "npm run test",
+        cwd: "/repo",
+        host: "gateway",
+        security: "allowlist",
+        ask: "always",
+        agentId: null,
+        resolvedPath: "/bin/npm",
+        sessionKey: null,
+      },
+      createdAtMs: 123,
+      expiresAtMs: 456,
+    });
+  });
+
+
   it("parses exec.approval.resolved payload", () => {
     const event: EventFrame = {
       type: "event",
@@ -151,7 +190,7 @@ describe("execApprovalEvents", () => {
     expect(resolveExecApprovalAgentId({ requested, agents })).toBe("agent-2");
   });
 
-  it("trusts explicit agent id even when the local agent list has not hydrated it yet", () => {
+  it("does not resolve explicit agent id until the local agent list has hydrated it", () => {
     const requested = {
       id: "approval-1",
       request: {
@@ -168,7 +207,7 @@ describe("execApprovalEvents", () => {
       expiresAtMs: 2,
     };
     const agents = [createAgent("agent-1", "agent:agent-1:main")];
-    expect(resolveExecApprovalAgentId({ requested, agents })).toBe("agent-prehydration");
+    expect(resolveExecApprovalAgentId({ requested, agents })).toBeNull();
   });
 
   it("falls back to session key when agent id missing", () => {

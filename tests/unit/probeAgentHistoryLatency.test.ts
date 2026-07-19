@@ -74,6 +74,13 @@ describe("probe-agent-history-latency", () => {
     });
   });
 
+  it("fails fast when cli option values are missing", () => {
+    expect(() => parseProbeArgs(["--base-url", "--json"])).toThrow(
+      "Missing value for --base-url"
+    );
+    expect(() => parseProbeArgs(["--samples", "0"])).toThrow("Invalid --samples: 0");
+  });
+
   it("resolves probe log directory from default and custom values", () => {
     expect(resolveProbeLogDir(null)).toBe(
       path.resolve(process.cwd(), ".agent/local/latency-probes")
@@ -146,8 +153,19 @@ describe("probe-agent-history-latency", () => {
       }).map((entry) => entry.path)
     ).toEqual([
       "/api/runtime/summary",
-      "/api/runtime/agents/main/history?limit=50&view=semantic&turnLimit=50&scanLimit=800",
+      "/api/runtime/agents/main/history?sessionKey=agent%3Amain%3Amain&limit=50&view=semantic&turnLimit=50&scanLimit=800",
     ]);
+  });
+
+  it("passes the resolved session key into the semantic history probe", () => {
+    expect(
+      buildProbePaths({
+        agentId: "alpha",
+        sessionKey: "agent:alpha:work item",
+      }).find((entry) => entry.name === "semantic-history")?.path
+    ).toBe(
+      "/api/runtime/agents/alpha/history?sessionKey=agent%3Aalpha%3Awork+item&limit=50&view=semantic&turnLimit=50&scanLimit=800"
+    );
   });
 
   it("computes percentile and stats summaries", () => {
@@ -356,6 +374,29 @@ describe("probe-agent-history-latency", () => {
       message:
         "runtime preflight failed: unable to read /api/runtime/summary (service unavailable)",
     });
+  });
+
+  it("fails runtime preflight on malformed summary payloads", () => {
+    expect(
+      assessRuntimePreflight({
+        response: { ok: true, body: null },
+        allowDisconnected: true,
+      }).message
+    ).toContain("invalid /api/runtime/summary payload");
+
+    expect(
+      assessRuntimePreflight({
+        response: { ok: true, body: {} },
+        allowDisconnected: true,
+      }).message
+    ).toContain("missing summary");
+
+    expect(
+      assessRuntimePreflight({
+        response: { ok: true, body: { summary: {} } },
+        allowDisconnected: true,
+      }).message
+    ).toContain("summary.status missing");
   });
 
   it("persists run logs as jsonl history and latest snapshot", () => {

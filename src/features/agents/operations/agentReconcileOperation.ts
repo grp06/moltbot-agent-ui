@@ -5,23 +5,7 @@ import {
   resolveReconcileWaitOutcome,
 } from "@/features/agents/operations/fleetLifecycleWorkflow";
 
-type GatewayClientLike = {
-  call: (method: string, params: unknown) => Promise<unknown>;
-};
-
-const callGateway = async <T>(
-  client: GatewayClientLike,
-  method: string,
-  params: unknown
-): Promise<T> => {
-  const invoke = (
-    client as unknown as { call?: (nextMethod: string, nextParams: unknown) => Promise<unknown> }
-  ).call;
-  if (typeof invoke !== "function") {
-    throw new Error("Gateway call transport is unavailable.");
-  }
-  return (await invoke(method, params)) as T;
-};
+type AgentRunWaiter = (params: { runId: string; timeoutMs: number }) => Promise<unknown>;
 
 type ReconcileCommand =
   | { kind: "clearRunTracking"; runId: string }
@@ -72,7 +56,7 @@ export const executeAgentReconcileCommands = (params: {
 };
 
 export const runAgentReconcileOperation = async (params: {
-  client: GatewayClientLike;
+  waitForAgentRun: AgentRunWaiter;
   agents: AgentState[];
   getLatestAgent: (agentId: string) => AgentState | null;
   claimRunId: (runId: string) => boolean;
@@ -95,10 +79,10 @@ export const runAgentReconcileOperation = async (params: {
     if (!params.claimRunId(runId)) continue;
 
     try {
-      const result = await callGateway<{ status?: unknown }>(params.client, "agent.wait", {
+      const result = (await params.waitForAgentRun({
         runId,
         timeoutMs: 1,
-      });
+      })) as { status?: unknown } | null;
       const outcome = resolveReconcileWaitOutcome(result?.status);
       if (!outcome) {
         continue;

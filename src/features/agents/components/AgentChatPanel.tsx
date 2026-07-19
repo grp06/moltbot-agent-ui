@@ -667,7 +667,12 @@ const AgentChatTranscript = memo(function AgentChatTranscript({
   const chatRef = useRef<HTMLDivElement | null>(null);
   const scrollFrameRef = useRef<number | null>(null);
   const pinnedRef = useRef(true);
-  const [isPinned, setIsPinned] = useState(true);
+  const [pinnedState, setPinnedState] = useState({
+    key: scrollToBottomOnOpenKey,
+    value: true,
+  });
+  const isPinned =
+    pinnedState.key === scrollToBottomOnOpenKey ? pinnedState.value : true;
   const [isAtTop, setIsAtTop] = useState(false);
   const [nowMs, setNowMs] = useState<number | null>(null);
 
@@ -678,10 +683,17 @@ const AgentChatTranscript = memo(function AgentChatTranscript({
   }, []);
 
   const setPinned = useCallback((nextPinned: boolean) => {
-    if (pinnedRef.current === nextPinned) return;
     pinnedRef.current = nextPinned;
-    setIsPinned(nextPinned);
-  }, []);
+    setPinnedState((current) => {
+      if (current.key === scrollToBottomOnOpenKey && current.value === nextPinned) {
+        return current;
+      }
+      return {
+        key: scrollToBottomOnOpenKey,
+        value: nextPinned,
+      };
+    });
+  }, [scrollToBottomOnOpenKey]);
 
   const updatePinnedFromScroll = useCallback(() => {
     const el = chatRef.current;
@@ -709,9 +721,9 @@ const AgentChatTranscript = memo(function AgentChatTranscript({
   }, [scrollChatToBottom]);
 
   useEffect(() => {
-    setPinned(true);
+    pinnedRef.current = true;
     scheduleScrollToBottom();
-  }, [scheduleScrollToBottom, scrollToBottomOnOpenKey, setPinned]);
+  }, [scheduleScrollToBottom, scrollToBottomOnOpenKey]);
 
   useEffect(() => {
     updatePinnedFromScroll();

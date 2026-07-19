@@ -61,6 +61,7 @@ export async function GET(request: Request) {
   }
   const controlPlane = bootstrap.runtime;
   const lastSeenId = parseLastEventIdFromRequest(request);
+  let cleanupStream: () => void = () => {};
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -70,19 +71,31 @@ export async function GET(request: Request) {
       let startupPhase = true;
       let lastDeliveredId = lastSeenId;
       const startupLiveBuffer: ControlPlaneOutboxEntry[] = [];
-      const close = () => {
-        if (closed) return;
+      const abortListener = () => {
+        close();
+      };
+      const cleanup = (): boolean => {
+        if (closed) return false;
         closed = true;
+        request.signal.removeEventListener("abort", abortListener);
         unsubscribe();
         if (heartbeat) {
           clearInterval(heartbeat);
           heartbeat = null;
         }
+        cleanupStream = () => {};
+        return true;
+      };
+      const close = () => {
+        if (!cleanup()) return;
         try {
           controller.close();
         } catch (err) {
           console.error("Failed to close runtime stream controller.", err);
         }
+      };
+      cleanupStream = () => {
+        cleanup();
       };
       const enqueueFrame = (frame: Uint8Array): boolean => {
         if (closed) return false;
@@ -105,6 +118,12 @@ export async function GET(request: Request) {
         lastDeliveredId = entry.id;
         return true;
       };
+
+      request.signal.addEventListener("abort", abortListener, { once: true });
+      if (request.signal.aborted) {
+        close();
+        return;
+      }
 
       unsubscribe = controlPlane.subscribe((entry) => {
         if (closed) {
@@ -168,8 +187,9 @@ export async function GET(request: Request) {
       heartbeat = setInterval(() => {
         enqueueFrame(heartbeatFrame());
       }, HEARTBEAT_INTERVAL_MS);
-
-      request.signal.addEventListener("abort", close, { once: true });
+    },
+    cancel() {
+      cleanupStream();
     },
   });
 

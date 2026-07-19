@@ -10,18 +10,29 @@ const parseCookies = (header) => {
     const key = part.slice(0, idx).trim();
     const value = part.slice(idx + 1).trim();
     if (!key) continue;
-    out[key] = value;
+    try {
+      out[key] = decodeURIComponent(value);
+    } catch {
+      out[key] = value;
+    }
   }
   return out;
 };
 
 const buildRedirectUrl = (req, nextPathWithQuery) => {
-  const host = req.headers?.host || "localhost";
-  const proto =
-    String(req.headers?.["x-forwarded-proto"] || "").toLowerCase() === "https"
-      ? "https"
-      : "http";
-  return `${proto}://${host}${nextPathWithQuery}`;
+  void req;
+  return nextPathWithQuery || "/";
+};
+
+const writeUnauthorized = (res) => {
+  res.statusCode = 401;
+  res.setHeader("Content-Type", "application/json");
+  res.end(
+    JSON.stringify({
+      error:
+        "Studio access token required. Open /?access_token=... once to set a cookie.",
+    })
+  );
 };
 
 function createAccessGate(options) {
@@ -53,7 +64,7 @@ function createAccessGate(options) {
       }
 
       url.searchParams.delete(queryParam);
-      const cookieValue = `${cookieName}=${token}; HttpOnly; Path=/; SameSite=Lax`;
+      const cookieValue = `${cookieName}=${encodeURIComponent(token)}; HttpOnly; Path=/; SameSite=Lax`;
       res.statusCode = 302;
       res.setHeader("Set-Cookie", cookieValue);
       res.setHeader("Location", buildRedirectUrl(req, url.pathname + url.search));
@@ -61,18 +72,9 @@ function createAccessGate(options) {
       return true;
     }
 
-    if (url.pathname.startsWith("/api/")) {
-      if (!isAuthorized(req)) {
-        res.statusCode = 401;
-        res.setHeader("Content-Type", "application/json");
-        res.end(
-          JSON.stringify({
-            error:
-              "Studio access token required. Open /?access_token=... once to set a cookie.",
-          })
-        );
-        return true;
-      }
+    if (!isAuthorized(req)) {
+      writeUnauthorized(res);
+      return true;
     }
 
     return false;
@@ -87,4 +89,3 @@ function createAccessGate(options) {
 }
 
 module.exports = { createAccessGate };
-

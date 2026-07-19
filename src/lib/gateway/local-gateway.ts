@@ -11,7 +11,7 @@ const parseHostname = (gatewayUrl: string): string | null => {
 export const isLocalGatewayUrl = (gatewayUrl: string): boolean => {
   const hostname = parseHostname(gatewayUrl);
   if (!hostname) return false;
-  const normalized = hostname.trim().toLowerCase();
+  const normalized = hostname.trim().toLowerCase().replace(/^\[(.*)\]$/, "$1");
   return (
     normalized === "localhost" ||
     normalized === "127.0.0.1" ||
@@ -19,4 +19,3 @@ export const isLocalGatewayUrl = (gatewayUrl: string): boolean => {
     normalized === "0.0.0.0"
   );
 };
-

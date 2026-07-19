@@ -8,6 +8,7 @@ const buildProps = () => ({
   draftGatewayUrl: "ws://127.0.0.1:18789",
   token: "token",
   hasStoredToken: true,
+  localGatewayDefaults: null,
   localGatewayDefaultsHasToken: false,
   hasUnsavedChanges: false,
   status: "disconnected" as const,

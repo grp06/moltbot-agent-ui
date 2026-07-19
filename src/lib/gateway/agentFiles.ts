@@ -1,4 +1,5 @@
 import type { AgentFileName } from "@/lib/agents/agentFiles";
+import { isSafeAgentId } from "@/lib/agents/agentIds";
 import type { GatewayClient } from "@/lib/gateway/GatewayClient";
 
 type AgentsFilesGetResponse = {
@@ -23,6 +24,9 @@ const resolveAgentId = (value: string) => {
   const trimmed = value.trim();
   if (!trimmed) {
     throw new Error("agentId is required.");
+  }
+  if (!isSafeAgentId(trimmed)) {
+    throw new Error(`Invalid agentId: ${trimmed}`);
   }
   return trimmed;
 };

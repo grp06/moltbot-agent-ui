@@ -19,6 +19,7 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    ".worktrees/**",
 
     // Vendored third-party code (kept as-is; linting it adds noise).
     "src/lib/avatars/vendor/**",

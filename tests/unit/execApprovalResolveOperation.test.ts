@@ -223,6 +223,69 @@ describe("execApprovalResolveOperation", () => {
     expect(onAllowed).not.toHaveBeenCalled();
   });
 
+  it("falls back to a matching safe session when approval agent id is unsafe", async () => {
+    const call = vi.fn(async (method: string) => {
+      if (method === "exec.approval.resolve") {
+        return { ok: true };
+      }
+      if (method === "agent.wait") {
+        return { status: "ok" };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const approval: PendingExecApproval = {
+      id: "appr-1",
+      agentId: "../a1",
+      sessionKey: "agent:a1:main",
+      command: "echo hi",
+      cwd: null,
+      host: null,
+      security: null,
+      ask: null,
+      resolvedPath: null,
+      createdAtMs: Date.now(),
+      expiresAtMs: Date.now() + 60_000,
+      resolving: false,
+      error: null,
+    };
+
+    const agent = {
+      agentId: "a1",
+      sessionKey: "agent:a1:main",
+      sessionCreated: true,
+      status: "running",
+      runId: "run-1",
+    } as unknown as AgentState;
+
+    const approvalsByAgentId = createState<Record<string, PendingExecApproval[]>>({
+      "../a1": [approval],
+    });
+    const unscopedApprovals = createState<PendingExecApproval[]>([]);
+    const requestHistoryRefresh = vi.fn();
+
+    await resolveExecApprovalViaStudio({
+      runtimeWriteTransport: createRuntimeWriteTransport({
+        client: { call } as never,
+        useDomainIntents: false,
+      }),
+      approvalId: "appr-1",
+      decision: "allow-once",
+      getAgents: () => [agent],
+      getLatestAgent: () => agent,
+      getPendingState: () => ({
+        approvalsByAgentId: approvalsByAgentId.get(),
+        unscopedApprovals: unscopedApprovals.get(),
+      }),
+      setPendingExecApprovalsByAgentId: approvalsByAgentId.set,
+      setUnscopedPendingExecApprovals: unscopedApprovals.set,
+      requestHistoryRefresh,
+      isDisconnectLikeError: () => false,
+    });
+
+    expect(requestHistoryRefresh).toHaveBeenCalledWith("a1");
+  });
+
   it("uses exec-approval-resolve intent in domain mode", async () => {
     const call = vi.fn(async (method: string) => {
       if (method === "exec.approval.resolve") {

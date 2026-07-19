@@ -1,8 +1,14 @@
 import { NextResponse } from "next/server";
 
+import { isSafeAgentId } from "@/lib/agents/agentIds";
 import { ensureDomainIntentRuntime, parseIntentBody } from "@/lib/controlplane/intent-route";
 import { ControlPlaneGatewayError } from "@/lib/controlplane/openclaw-adapter";
-import type { CronDelivery, CronPayload, CronSchedule } from "@/lib/cron/types";
+import {
+  resolveOptionalCronSessionKey,
+  type CronDelivery,
+  type CronPayload,
+  type CronSchedule,
+} from "@/lib/cron/types";
 
 export const runtime = "nodejs";
 
@@ -36,6 +42,9 @@ const parseRestoreJob = (value: unknown, index: number): CronJobRestoreInput => 
   if (!agentId) {
     throw new Error(`jobs[${index}].agentId is required.`);
   }
+  if (!isSafeAgentId(agentId)) {
+    throw new Error(`jobs[${index}].agentId is invalid.`);
+  }
   if (typeof value.enabled !== "boolean") {
     throw new Error(`jobs[${index}].enabled must be boolean.`);
   }
@@ -56,7 +65,11 @@ const parseRestoreJob = (value: unknown, index: number): CronJobRestoreInput => 
     throw new Error(`jobs[${index}].payload is required.`);
   }
 
-  const sessionKey = typeof value.sessionKey === "string" ? value.sessionKey : undefined;
+  const sessionKey = resolveOptionalCronSessionKey(
+    value.sessionKey,
+    agentId,
+    `jobs[${index}].sessionKey`
+  );
   const description = typeof value.description === "string" ? value.description : undefined;
   const deleteAfterRun = typeof value.deleteAfterRun === "boolean" ? value.deleteAfterRun : undefined;
   const delivery = isRecord(value.delivery) ? (value.delivery as CronDelivery) : undefined;
@@ -111,7 +124,13 @@ export async function POST(request: Request) {
   if (!Array.isArray(jobsRaw)) {
     return NextResponse.json({ error: "jobs must be an array." }, { status: 400 });
   }
-  const jobs = jobsRaw.map((job, index) => parseRestoreJob(job, index));
+  let jobs: CronJobRestoreInput[];
+  try {
+    jobs = jobsRaw.map((job, index) => parseRestoreJob(job, index));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid cron restore payload.";
+    return NextResponse.json({ error: message }, { status: 400 });
+  }
 
   const runtimeOrError = await ensureDomainIntentRuntime();
   if (runtimeOrError instanceof Response) {

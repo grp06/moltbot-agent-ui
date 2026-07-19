@@ -46,15 +46,16 @@ const buildEnvelope = (): StudioSettingsResponse => ({
   },
   gatewayMeta: {
     hasStoredToken: true,
+    credentialScope: "scope-one",
   },
   installContext: defaultStudioInstallContext(),
   domainApiModeEnabled: true,
 });
 
-const renderHook = () => {
+const renderHook = (envelope: StudioSettingsResponse = buildEnvelope()) => {
   const coordinator = {
-    loadSettings: vi.fn(async () => buildEnvelope().settings),
-    loadSettingsEnvelope: vi.fn(async () => buildEnvelope()),
+    loadSettings: vi.fn(async () => envelope.settings),
+    loadSettingsEnvelope: vi.fn(async () => envelope),
     flushPending: vi.fn(async () => {}),
   };
   const valueRef: { current: HookValue | null } = { current: null };
@@ -312,6 +313,130 @@ describe("useStudioGatewaySettings", () => {
     });
     expect(ctx.getValue().error).toBe(
       "Control-plane gateway connection failed: connect ECONNREFUSED 127.0.0.1:18789"
+    );
+
+    ctx.unmount();
+  });
+
+  it("requires an explicit token when only local defaults exist and the draft url is remote", async () => {
+    const envelope = buildEnvelope();
+    envelope.settings.gateway = {
+      url: "ws://localhost:18789",
+      token: "",
+    };
+    envelope.gatewayMeta = {
+      hasStoredToken: false,
+      credentialScope: "local-scope",
+    };
+    envelope.localGatewayDefaults = {
+      url: "ws://localhost:18789",
+      token: "",
+    };
+    envelope.localGatewayDefaultsMeta = {
+      hasToken: true,
+    };
+    const ctx = renderHook(envelope);
+
+    await waitFor(() => {
+      expect(ctx.getValue().status).toBe("connected");
+    });
+
+    act(() => {
+      ctx.getValue().setGatewayUrl("wss://gateway.example");
+    });
+
+    let saved = true;
+    await act(async () => {
+      saved = await ctx.getValue().saveSettings();
+    });
+
+    expect(saved).toBe(false);
+    expect(ctx.getValue().error).toBe(
+      "Gateway token is required. Enter one or keep the stored token."
+    );
+    expect(ctx.coordinator.flushPending).not.toHaveBeenCalled();
+    expect(mockedFetchJson).not.toHaveBeenCalledWith("/api/studio", expect.anything());
+
+    ctx.unmount();
+  });
+
+  it("requires an explicit token when a stored token exists for a different gateway url", async () => {
+    const envelope = buildEnvelope();
+    envelope.settings.gateway = {
+      url: "wss://gateway.old.example",
+      token: "",
+    };
+    envelope.gatewayMeta = {
+      hasStoredToken: true,
+      credentialScope: "stored-scope",
+    };
+    const ctx = renderHook(envelope);
+
+    await waitFor(() => {
+      expect(ctx.getValue().status).toBe("connected");
+    });
+
+    act(() => {
+      ctx.getValue().setGatewayUrl("wss://gateway.new.example");
+    });
+
+    let saved = true;
+    await act(async () => {
+      saved = await ctx.getValue().saveSettings();
+    });
+
+    expect(saved).toBe(false);
+    expect(ctx.getValue().error).toBe(
+      "Gateway token is required. Enter one or keep the stored token."
+    );
+    expect(ctx.coordinator.flushPending).not.toHaveBeenCalled();
+    expect(mockedFetchJson).not.toHaveBeenCalledWith("/api/studio", expect.anything());
+
+    ctx.unmount();
+  });
+
+  it("allows a blank token when local defaults apply to the draft url", async () => {
+    const envelope = buildEnvelope();
+    envelope.settings.gateway = {
+      url: "ws://localhost:18789",
+      token: "",
+    };
+    envelope.gatewayMeta = {
+      hasStoredToken: false,
+      credentialScope: "local-scope",
+    };
+    envelope.localGatewayDefaults = {
+      url: "ws://localhost:18789",
+      token: "",
+    };
+    envelope.localGatewayDefaultsMeta = {
+      hasToken: true,
+    };
+    mockedFetchJson.mockImplementation(async (input) => {
+      if (input === "/api/studio") {
+        return envelope;
+      }
+      throw new Error(`Unexpected fetchJson call: ${String(input)}`);
+    });
+    const ctx = renderHook(envelope);
+
+    await waitFor(() => {
+      expect(ctx.getValue().status).toBe("connected");
+    });
+
+    let saved = false;
+    await act(async () => {
+      saved = await ctx.getValue().saveSettings();
+    });
+
+    expect(saved).toBe(true);
+    expect(ctx.coordinator.flushPending).toHaveBeenCalledTimes(1);
+    expect(mockedFetchJson).toHaveBeenCalledWith(
+      "/api/studio",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ gateway: { url: "ws://localhost:18789" } }),
+      })
     );
 
     ctx.unmount();

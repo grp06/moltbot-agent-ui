@@ -1,6 +1,8 @@
 import type { AgentState } from "@/features/agents/state/store";
 import type { EventFrame } from "@/lib/gateway/gateway-frames";
 import type { ExecApprovalDecision } from "@/features/agents/approvals/types";
+import { resolveSafeAgentId } from "@/lib/agents/agentIds";
+import { resolveSafeSessionKey } from "@/lib/gateway/session-keys";
 
 type RequestedPayload = {
   id: string;
@@ -61,9 +63,9 @@ export const parseExecApprovalRequested = (event: EventFrame): RequestedPayload 
       host: asOptionalString(request.host),
       security: asOptionalString(request.security),
       ask: asOptionalString(request.ask),
-      agentId: asOptionalString(request.agentId),
+      agentId: resolveSafeAgentId(request.agentId),
       resolvedPath: asOptionalString(request.resolvedPath),
-      sessionKey: asOptionalString(request.sessionKey),
+      sessionKey: resolveSafeSessionKey(request.sessionKey),
     },
     createdAtMs,
     expiresAtMs,
@@ -95,7 +97,8 @@ export const resolveExecApprovalAgentId = (params: {
 }): string | null => {
   const requestedAgentId = params.requested.request.agentId;
   if (requestedAgentId) {
-    return requestedAgentId;
+    const matchedByAgentId = params.agents.find((agent) => agent.agentId === requestedAgentId);
+    if (matchedByAgentId) return matchedByAgentId.agentId;
   }
   const requestedSessionKey = params.requested.request.sessionKey;
   if (!requestedSessionKey) return null;

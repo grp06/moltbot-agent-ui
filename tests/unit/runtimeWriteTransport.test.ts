@@ -119,21 +119,21 @@ describe("runtimeWriteTransport", () => {
       useDomainIntents: true,
     });
 
-    await domainTransport.chatAbort({ sessionKey: "agent:1" });
-    await domainTransport.sessionsReset({ key: "agent:1" });
+    await domainTransport.chatAbort({ sessionKey: "agent:agent-1:main" });
+    await domainTransport.sessionsReset({ key: "agent:agent-1:main" });
     await domainTransport.sessionSettingsSync({
-      sessionKey: "agent:1",
+      sessionKey: "agent:agent-1:main",
       model: "openai/gpt-5",
     });
 
     expect(mockedPostStudioIntent).toHaveBeenNthCalledWith(1, "/api/intents/chat-abort", {
-      sessionKey: "agent:1",
+      sessionKey: "agent:agent-1:main",
     });
     expect(mockedPostStudioIntent).toHaveBeenNthCalledWith(2, "/api/intents/sessions-reset", {
-      key: "agent:1",
+      key: "agent:agent-1:main",
     });
     expect(mockedPostStudioIntent).toHaveBeenNthCalledWith(3, "/api/intents/session-settings-sync", {
-      sessionKey: "agent:1",
+      sessionKey: "agent:agent-1:main",
       model: "openai/gpt-5",
     });
     expect(domainCall).not.toHaveBeenCalled();
@@ -145,17 +145,17 @@ describe("runtimeWriteTransport", () => {
       useDomainIntents: false,
     });
 
-    await gatewayTransport.chatAbort({ sessionKey: "agent:2" });
-    await gatewayTransport.sessionsReset({ key: "agent:2" });
+    await gatewayTransport.chatAbort({ sessionKey: "agent:agent-2:main" });
+    await gatewayTransport.sessionsReset({ key: "agent:agent-2:main" });
     await gatewayTransport.sessionSettingsSync({
-      sessionKey: "agent:2",
+      sessionKey: "agent:agent-2:main",
       thinkingLevel: "high",
     });
 
-    expect(gatewayCall).toHaveBeenNthCalledWith(1, "chat.abort", { sessionKey: "agent:2" });
-    expect(gatewayCall).toHaveBeenNthCalledWith(2, "sessions.reset", { key: "agent:2" });
+    expect(gatewayCall).toHaveBeenNthCalledWith(1, "chat.abort", { sessionKey: "agent:agent-2:main" });
+    expect(gatewayCall).toHaveBeenNthCalledWith(2, "sessions.reset", { key: "agent:agent-2:main" });
     expect(gatewayCall).toHaveBeenNthCalledWith(3, "sessions.patch", {
-      key: "agent:2",
+      key: "agent:agent-2:main",
       thinkingLevel: "high",
     });
     expect(mockedPostStudioIntent).not.toHaveBeenCalled();
@@ -168,10 +168,10 @@ describe("runtimeWriteTransport", () => {
       useDomainIntents: true,
     });
 
-    await domainTransport.chatAbort({ sessionKey: " agent:3 ", runId: " run-3 " });
+    await domainTransport.chatAbort({ sessionKey: " agent:agent-3:main ", runId: " run-3 " });
 
     expect(mockedPostStudioIntent).toHaveBeenCalledWith("/api/intents/chat-abort", {
-      sessionKey: "agent:3",
+      sessionKey: "agent:agent-3:main",
       runId: "run-3",
     });
     expect(domainCall).not.toHaveBeenCalled();
@@ -183,10 +183,10 @@ describe("runtimeWriteTransport", () => {
       useDomainIntents: false,
     });
 
-    await gatewayTransport.chatAbort({ sessionKey: " agent:4 ", runId: " run-4 " });
+    await gatewayTransport.chatAbort({ sessionKey: " agent:agent-4:main ", runId: " run-4 " });
 
     expect(gatewayCall).toHaveBeenCalledWith("chat.abort", {
-      sessionKey: "agent:4",
+      sessionKey: "agent:agent-4:main",
       runId: "run-4",
     });
     expect(mockedPostStudioIntent).not.toHaveBeenCalled();
@@ -266,6 +266,21 @@ describe("runtimeWriteTransport", () => {
     expect(mockedCreateGatewayAgent).not.toHaveBeenCalled();
   });
 
+  it("rejects unsafe created agent ids from domain intent mode", async () => {
+    mockedPostStudioIntent.mockResolvedValue({
+      ok: true,
+      payload: { ok: true, agentId: "../agent-2", name: "Agent Two" },
+    });
+    const domainTransport = createRuntimeWriteTransport({
+      client: { call: vi.fn(async () => ({})) } as never,
+      useDomainIntents: true,
+    });
+
+    await expect(domainTransport.agentCreate({ name: "Agent Two" })).rejects.toThrow(
+      "Agent create response missing or invalid agentId."
+    );
+  });
+
   it("normalizes rename inputs consistently across modes", async () => {
     const gatewayTransport = createRuntimeWriteTransport({
       client: { call: vi.fn(async () => ({})) } as never,
@@ -299,10 +314,10 @@ describe("runtimeWriteTransport", () => {
       useDomainIntents: false,
     });
 
-    await gatewayTransport.execApprovalResolve({ id: "approval-1", decision: "allow" });
+    await gatewayTransport.execApprovalResolve({ id: "approval-1", decision: "allow-once" });
     expect(call).toHaveBeenCalledWith("exec.approval.resolve", {
       id: "approval-1",
-      decision: "allow",
+      decision: "allow-once",
     });
 
     call.mockReset();
@@ -316,6 +331,20 @@ describe("runtimeWriteTransport", () => {
       id: "approval-2",
       decision: "deny",
     });
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid exec approval decisions before writing", async () => {
+    const call = vi.fn(async () => ({}));
+    const transport = createRuntimeWriteTransport({
+      client: { call } as never,
+      useDomainIntents: false,
+    });
+
+    await expect(
+      transport.execApprovalResolve({ id: "approval-1", decision: "allow" as never })
+    ).rejects.toThrow("Exec approval decision must be allow-once, allow-always, or deny.");
+
     expect(call).not.toHaveBeenCalled();
   });
 
@@ -434,8 +463,16 @@ describe("runtimeWriteTransport", () => {
         idempotencyKey: "run-1",
       })
     ).rejects.toThrow("Session key is required.");
+    await expect(
+      transport.chatSend({
+        sessionKey: "agent:../agent-1:main",
+        message: "hello",
+        deliver: false,
+        idempotencyKey: "run-1",
+      })
+    ).rejects.toThrow("Invalid sessionKey.");
     await expect(transport.agentWait({ runId: "   " })).rejects.toThrow("Run id is required.");
-    await expect(transport.execApprovalResolve({ id: "   ", decision: "allow" })).rejects.toThrow(
+    await expect(transport.execApprovalResolve({ id: "   ", decision: "allow-once" })).rejects.toThrow(
       "Approval id is required."
     );
     await expect(transport.agentDelete({ agentId: "   " })).rejects.toThrow("Agent id is required.");
@@ -449,20 +486,25 @@ describe("runtimeWriteTransport", () => {
   });
 
   it("routes agent wait through mode-specific transport with timeout passthrough", async () => {
-    const gatewayCall = vi.fn(async () => ({}));
+    const gatewayCall = vi.fn(async () => ({ status: "ok" }));
     const gatewayTransport = createRuntimeWriteTransport({
       client: { call: gatewayCall } as never,
       useDomainIntents: false,
     });
-    await gatewayTransport.agentWait({ runId: "run-1", timeoutMs: 2500 });
+    await expect(gatewayTransport.agentWait({ runId: "run-1", timeoutMs: 2500 })).resolves.toEqual({
+      status: "ok",
+    });
     expect(gatewayCall).toHaveBeenCalledWith("agent.wait", { runId: "run-1", timeoutMs: 2500 });
 
     mockedPostStudioIntent.mockReset();
+    mockedPostStudioIntent.mockResolvedValue({ ok: true, payload: { status: "error" } });
     const domainTransport = createRuntimeWriteTransport({
       client: { call: vi.fn(async () => ({})) } as never,
       useDomainIntents: true,
     });
-    await domainTransport.agentWait({ runId: "run-2", timeoutMs: 3000 });
+    await expect(domainTransport.agentWait({ runId: "run-2", timeoutMs: 3000 })).resolves.toEqual({
+      status: "error",
+    });
     expect(mockedPostStudioIntent).toHaveBeenCalledWith("/api/intents/agent-wait", {
       runId: "run-2",
       timeoutMs: 3000,

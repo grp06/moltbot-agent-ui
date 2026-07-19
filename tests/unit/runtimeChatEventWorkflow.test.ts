@@ -286,6 +286,29 @@ describe("runtime chat event workflow", () => {
     );
   });
 
+  it("does not queue latest-update refreshes for tool final events", () => {
+    const result = planRuntimeChatEvent(
+      createInput({
+        payload: createPayload({
+          state: "final",
+          message: { role: "tool", content: "tool output" },
+        }),
+        agent: createAgent({ lastUserMessage: "heartbeat?", latestOverride: null }),
+        role: "tool",
+        isToolRole: true,
+        nextTextRaw: "tool output",
+        nextText: "tool output",
+        finalAssistantText: null,
+      })
+    );
+
+    const policy = findCommand(result.commands, "applyPolicyIntents");
+    expect(policy).toBeDefined();
+    expect((policy?.intents ?? []).some((intent) => intent.kind === "queueLatestUpdate")).toBe(
+      false
+    );
+  });
+
   it("plans aborted output command and policy intents", () => {
     const result = planRuntimeChatEvent(
       createInput({

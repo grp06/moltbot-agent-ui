@@ -228,6 +228,33 @@ describe("agent store", () => {
     expect(afterDraftUpdate.transcriptSequenceCounter).toBe(beforeDraftUpdate.transcriptSequenceCounter);
   });
 
+  it("ignores_empty_appended_output_to_keep_transcript_projection_consistent", () => {
+    const seed: AgentStoreSeed = {
+      agentId: "agent-1",
+      name: "Agent One",
+      sessionKey: "agent:agent-1:main",
+    };
+    let state = agentStoreReducer(initialAgentStoreState, {
+      type: "hydrateAgents",
+      agents: [seed],
+    });
+    state = agentStoreReducer(state, {
+      type: "appendOutput",
+      agentId: "agent-1",
+      line: "response",
+    });
+
+    const before = state.agents[0];
+
+    state = agentStoreReducer(state, {
+      type: "appendOutput",
+      agentId: "agent-1",
+      line: "",
+    });
+
+    expect(state.agents[0]).toBe(before);
+  });
+
   it("tracks_unseen_activity_for_non_selected_agents", () => {
     const seeds: AgentStoreSeed[] = [
       {

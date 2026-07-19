@@ -35,17 +35,20 @@ export type StudioSettingsPatch = {
 const SETTINGS_VERSION = 1 as const;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
-  Boolean(value && typeof value === "object");
+  Boolean(value && typeof value === "object" && !Array.isArray(value));
 
 const coerceString = (value: unknown) => (typeof value === "string" ? value.trim() : "");
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "0.0.0.0"]);
 
-const normalizeGatewayUrl = (value: unknown) => {
+const normalizeParsedHostname = (value: string) =>
+  value.trim().toLowerCase().replace(/^\[(.*)\]$/, "$1");
+
+export const normalizeGatewayUrl = (value: unknown) => {
   const url = coerceString(value);
   if (!url) return "";
   try {
     const parsed = new URL(url);
-    if (!LOOPBACK_HOSTNAMES.has(parsed.hostname.toLowerCase())) {
+    if (!LOOPBACK_HOSTNAMES.has(normalizeParsedHostname(parsed.hostname))) {
       return url;
     }
     const auth =
@@ -60,6 +63,16 @@ const normalizeGatewayUrl = (value: unknown) => {
   } catch {
     return url;
   }
+};
+
+export const canUseLocalGatewayDefaultsForUrl = (
+  configuredUrl: unknown,
+  defaultsUrl: unknown
+) => {
+  const fallbackUrl = normalizeGatewayUrl(defaultsUrl);
+  if (!fallbackUrl) return false;
+  const url = normalizeGatewayUrl(configuredUrl);
+  return !url || url === fallbackUrl;
 };
 
 const normalizeGatewayKey = (value: unknown) => {
@@ -142,8 +155,15 @@ const mergeGatewaySettings = (
   if (patch === null) return null;
   if (!isRecord(patch)) return current;
 
+  const patchHasUrl = hasOwn(patch, "url");
+  const patchHasToken = hasOwn(patch, "token");
   const nextUrl = hasOwn(patch, "url") ? normalizeGatewayUrl(patch.url) : current?.url ?? "";
-  const nextToken = hasOwn(patch, "token") ? coerceString(patch.token) : current?.token ?? "";
+  const sameGatewayUrl = normalizeGatewayUrl(current?.url ?? "") === nextUrl;
+  const nextToken = patchHasToken
+    ? coerceString(patch.token)
+    : patchHasUrl && !sameGatewayUrl
+      ? ""
+      : current?.token ?? "";
   if (!nextUrl) return null;
   return { url: nextUrl, token: nextToken };
 };

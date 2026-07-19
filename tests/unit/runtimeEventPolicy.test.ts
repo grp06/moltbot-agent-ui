@@ -172,7 +172,7 @@ describe("runtime event policy", () => {
     expect(intents).toEqual([{ kind: "ignore", reason: "stale-terminal-event" }]);
   });
 
-  it("returns_idle_terminal_intents_for_aborted_mismatched_run_when_agent_is_running", () => {
+  it("returns_only_stale_run_cleanup_for_aborted_mismatched_run_when_agent_is_running", () => {
     const intents = decideRuntimeChatEvent({
       agentId: "agent-1",
       state: "aborted",
@@ -197,29 +197,7 @@ describe("runtime event policy", () => {
       latestUpdateMessage: null,
     });
 
-    expect(findIntent(intents, "clearPendingLivePatch")).toEqual({
-      kind: "clearPendingLivePatch",
-      agentId: "agent-1",
-    });
-    expect(findIntent(intents, "clearRunTracking")).toEqual({
-      kind: "clearRunTracking",
-      runId: "run-old",
-    });
-    expect(findIntent(intents, "markRunClosed")).toEqual({
-      kind: "markRunClosed",
-      runId: "run-old",
-    });
-    expect(intents).toContainEqual({
-      kind: "dispatchUpdateAgent",
-      agentId: "agent-1",
-      patch: {
-        streamText: null,
-        thinkingTrace: null,
-        runStartedAt: null,
-        status: "idle",
-        runId: null,
-      },
-    });
+    expect(intents).toEqual([{ kind: "clearRunTracking", runId: "run-old" }]);
   });
 
   it("returns_agent_preflight_intents_for_closed_or_stale_runs", () => {
@@ -242,6 +220,37 @@ describe("runtime event policy", () => {
 
     expect(closed).toEqual([{ kind: "ignore", reason: "closed-run-event" }]);
     expect(stale).toEqual([{ kind: "clearRunTracking", runId: "run-1" }]);
+  });
+
+  it("guards lifecycle starts for closed and mismatched active runs", () => {
+    const closedStart = decideRuntimeAgentEvent({
+      runId: "run-1",
+      stream: "lifecycle",
+      phase: "start",
+      activeRunId: "run-1",
+      agentStatus: "running",
+      isClosedRun: true,
+    });
+    const mismatchedStart = decideRuntimeAgentEvent({
+      runId: "run-old",
+      stream: "lifecycle",
+      phase: "start",
+      activeRunId: "run-new",
+      agentStatus: "running",
+      isClosedRun: false,
+    });
+    const idleStart = decideRuntimeAgentEvent({
+      runId: "run-1",
+      stream: "lifecycle",
+      phase: "start",
+      activeRunId: null,
+      agentStatus: "idle",
+      isClosedRun: false,
+    });
+
+    expect(closedStart).toEqual([{ kind: "ignore", reason: "closed-run-event" }]);
+    expect(mismatchedStart).toEqual([{ kind: "clearRunTracking", runId: "run-old" }]);
+    expect(idleStart).toEqual([]);
   });
 
   it("returns_no_summary_refresh_intent_for_presence_and_heartbeat", () => {

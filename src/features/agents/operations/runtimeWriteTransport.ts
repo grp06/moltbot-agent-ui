@@ -1,7 +1,10 @@
 import { postStudioIntent } from "@/lib/controlplane/intents-client";
+import type { ExecApprovalDecision } from "@/features/agents/approvals/types";
 import type { GatewayClient } from "@/lib/gateway/GatewayClient";
 import { syncGatewaySessionSettings } from "@/lib/gateway/session-settings-sync";
 import { createGatewayAgent, deleteGatewayAgent, renameGatewayAgent } from "@/lib/gateway/agentConfig";
+import { hasMalformedAgentSessionKey } from "@/lib/gateway/session-keys";
+import { resolveSafeAgentId } from "@/lib/agents/agentIds";
 import {
   readGatewayAgentExecApprovals,
   upsertGatewayAgentExecApprovals,
@@ -30,7 +33,7 @@ export type RuntimeWriteTransport = {
   sessionsReset: (params: { key: string }) => Promise<void>;
   agentRename: (params: { agentId: string; name: string }) => Promise<void>;
   agentDelete: (params: { agentId: string }) => Promise<void>;
-  execApprovalResolve: (params: { id: string; decision: string }) => Promise<void>;
+  execApprovalResolve: (params: { id: string; decision: ExecApprovalDecision }) => Promise<void>;
   execApprovalsSet: (params: { agentId: string; role: RuntimeWriteExecutionRole }) => Promise<void>;
   agentPermissionsUpdate: (params: {
     agentId: string;
@@ -39,7 +42,7 @@ export type RuntimeWriteTransport = {
     webAccess: boolean;
     fileTools: boolean;
   }) => Promise<void>;
-  agentWait: (params: { runId: string; timeoutMs?: number }) => Promise<void>;
+  agentWait: (params: { runId: string; timeoutMs?: number }) => Promise<unknown>;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -51,6 +54,22 @@ const requireNonEmpty = (value: string, fieldLabel: string): string => {
     throw new Error(`${fieldLabel} is required.`);
   }
   return trimmed;
+};
+
+const requireSafeSessionKey = (value: string): string => {
+  const sessionKey = requireNonEmpty(value, "Session key");
+  if (hasMalformedAgentSessionKey(sessionKey)) {
+    throw new Error("Invalid sessionKey.");
+  }
+  return sessionKey;
+};
+
+const resolveExecApprovalDecision = (value: string): ExecApprovalDecision => {
+  const decision = value.trim();
+  if (decision === "allow-once" || decision === "allow-always" || decision === "deny") {
+    return decision;
+  }
+  throw new Error("Exec approval decision must be allow-once, allow-always, or deny.");
 };
 
 const callLegacyGateway = async <T>(
@@ -101,7 +120,7 @@ export function createRuntimeWriteTransport(params: {
   return {
     useDomainIntents: params.useDomainIntents,
     chatSend: async (input) => {
-      const normalizedSessionKey = requireNonEmpty(input.sessionKey, "Session key");
+      const normalizedSessionKey = requireSafeSessionKey(input.sessionKey);
       const normalizedIdempotencyKey = requireNonEmpty(input.idempotencyKey, "Idempotency key");
       const payload = {
         ...input,
@@ -122,7 +141,7 @@ export function createRuntimeWriteTransport(params: {
       execSecurity,
       execAsk,
     }) => {
-      const normalizedSessionKey = requireNonEmpty(sessionKey, "Session key");
+      const normalizedSessionKey = requireSafeSessionKey(sessionKey);
       const includeModel = model !== undefined;
       const includeThinkingLevel = thinkingLevel !== undefined;
       const includeExecHost = execHost !== undefined;
@@ -164,9 +183,9 @@ export function createRuntimeWriteTransport(params: {
         const payload = unwrapIntentPayload<{ agentId?: unknown; name?: unknown }>(
           await postIntent("/api/intents/agent-create", { name: normalizedName })
         );
-        const agentId = typeof payload?.agentId === "string" ? payload.agentId.trim() : "";
+        const agentId = resolveSafeAgentId(payload?.agentId) ?? "";
         if (!agentId) {
-          throw new Error("Agent create response missing agentId.");
+          throw new Error("Agent create response missing or invalid agentId.");
         }
         const resolvedName =
           typeof payload?.name === "string" && payload.name.trim()
@@ -185,7 +204,7 @@ export function createRuntimeWriteTransport(params: {
       return { id: created.id, name: createdName };
     },
     chatAbort: async ({ sessionKey, runId }) => {
-      const normalizedSessionKey = requireNonEmpty(sessionKey, "Session key");
+      const normalizedSessionKey = requireSafeSessionKey(sessionKey);
       const normalizedRunId = typeof runId === "string" ? runId.trim() : "";
       const payload = normalizedRunId
         ? { sessionKey: normalizedSessionKey, runId: normalizedRunId }
@@ -197,7 +216,7 @@ export function createRuntimeWriteTransport(params: {
       await callLegacyGateway(params.client, "chat.abort", payload);
     },
     sessionsReset: async ({ key }) => {
-      const normalizedSessionKey = requireNonEmpty(key, "Session key");
+      const normalizedSessionKey = requireSafeSessionKey(key);
       if (params.useDomainIntents) {
         await postIntent("/api/intents/sessions-reset", { key: normalizedSessionKey });
         return;
@@ -230,13 +249,17 @@ export function createRuntimeWriteTransport(params: {
     },
     execApprovalResolve: async ({ id, decision }) => {
       const normalizedId = requireNonEmpty(id, "Approval id");
+      const normalizedDecision = resolveExecApprovalDecision(decision);
       if (params.useDomainIntents) {
-        await postIntent("/api/intents/exec-approval-resolve", { id: normalizedId, decision });
+        await postIntent("/api/intents/exec-approval-resolve", {
+          id: normalizedId,
+          decision: normalizedDecision,
+        });
         return;
       }
       await callLegacyGateway(params.client, "exec.approval.resolve", {
         id: normalizedId,
-        decision,
+        decision: normalizedDecision,
       });
     },
     execApprovalsSet: async ({ agentId, role }) => {
@@ -263,7 +286,7 @@ export function createRuntimeWriteTransport(params: {
     },
     agentPermissionsUpdate: async ({ agentId, sessionKey, commandMode, webAccess, fileTools }) => {
       const normalizedAgentId = requireNonEmpty(agentId, "Agent id");
-      const normalizedSessionKey = requireNonEmpty(sessionKey, "Session key");
+      const normalizedSessionKey = requireSafeSessionKey(sessionKey);
       if (params.useDomainIntents) {
         await postIntent("/api/intents/agent-permissions-update", {
           agentId: normalizedAgentId,
@@ -279,13 +302,14 @@ export function createRuntimeWriteTransport(params: {
     agentWait: async ({ runId, timeoutMs }) => {
       const normalizedRunId = requireNonEmpty(runId, "Run id");
       if (params.useDomainIntents) {
-        await postIntent("/api/intents/agent-wait", {
-          runId: normalizedRunId,
-          ...(typeof timeoutMs === "number" ? { timeoutMs } : {}),
-        });
-        return;
+        return unwrapIntentPayload<unknown>(
+          await postIntent("/api/intents/agent-wait", {
+            runId: normalizedRunId,
+            ...(typeof timeoutMs === "number" ? { timeoutMs } : {}),
+          })
+        );
       }
-      await callLegacyGateway(params.client, "agent.wait", {
+      return await callLegacyGateway(params.client, "agent.wait", {
         runId: normalizedRunId,
         ...(typeof timeoutMs === "number" ? { timeoutMs } : {}),
       });

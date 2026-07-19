@@ -58,12 +58,26 @@ async function main() {
   });
 
   await app.prepare();
+  const handleUpgrade = app.getUpgradeHandler();
 
-  const createServer = () =>
-    http.createServer((req, res) => {
+  const createServer = () => {
+    const server = http.createServer((req, res) => {
       if (accessGate.handleHttp(req, res)) return;
       handle(req, res);
     });
+    server.on("upgrade", (req, socket, head) => {
+      if (!accessGate.allowUpgrade(req)) {
+        socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+      Promise.resolve(handleUpgrade(req, socket, head)).catch((err) => {
+        console.error("Failed to handle upgrade request.", err);
+        socket.destroy();
+      });
+    });
+    return server;
+  };
 
   const servers = hostnames.map(() => createServer());
 

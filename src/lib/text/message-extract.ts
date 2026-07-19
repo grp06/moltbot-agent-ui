@@ -1,3 +1,9 @@
+import {
+  extractThinkingFromTaggedStream,
+  extractThinkingFromTaggedText,
+  hasUnclosedThinkingTag,
+} from "@/lib/text/thinking-tags";
+
 const ENVELOPE_PREFIX = /^\[([^\]]+)\]\s*/;
 const ENVELOPE_CHANNELS = [
   "WebChat",
@@ -23,7 +29,6 @@ const THINKING_CLOSE_RE = /<\s*\/\s*(think(?:ing)?|analysis)\s*>/i;
 
 const THINKING_BLOCK_RE =
   /<\s*(think(?:ing)?|analysis)\s*>([\s\S]*?)<\s*\/\s*\1\s*>/gi;
-const THINKING_STREAM_TAG_RE = /<\s*(\/?)\s*(?:think(?:ing)?|analysis|thought|antthinking)\s*>/gi;
 const TRACE_MARKDOWN_PREFIX = "[[trace]]";
 
 const TOOL_CALL_PREFIX = "[[tool]]";
@@ -269,41 +274,11 @@ export const extractThinking = (message: unknown): string | null => {
   return openTagged ? openTagged : null;
 };
 
-export function extractThinkingFromTaggedText(text: string): string {
-  if (!text) return "";
-  let result = "";
-  let lastIndex = 0;
-  let inThinking = false;
-  THINKING_STREAM_TAG_RE.lastIndex = 0;
-  for (const match of text.matchAll(THINKING_STREAM_TAG_RE)) {
-    const idx = match.index ?? 0;
-    if (inThinking) {
-      result += text.slice(lastIndex, idx);
-    }
-    const isClose = match[1] === "/";
-    inThinking = !isClose;
-    lastIndex = idx + match[0].length;
-  }
-  return result.trim();
-}
-
-export function extractThinkingFromTaggedStream(text: string): string {
-  if (!text) return "";
-  const closed = extractThinkingFromTaggedText(text);
-  if (closed) return closed;
-  const openRe = /<\s*(?:think(?:ing)?|analysis|thought|antthinking)\s*>/gi;
-  const closeRe = /<\s*\/\s*(?:think(?:ing)?|analysis|thought|antthinking)\s*>/gi;
-  const openMatches = [...text.matchAll(openRe)];
-  if (openMatches.length === 0) return "";
-  const closeMatches = [...text.matchAll(closeRe)];
-  const lastOpen = openMatches[openMatches.length - 1];
-  const lastClose = closeMatches[closeMatches.length - 1];
-  if (lastClose && (lastClose.index ?? -1) > (lastOpen.index ?? -1)) {
-    return closed;
-  }
-  const start = (lastOpen.index ?? 0) + lastOpen[0].length;
-  return text.slice(start).trim();
-}
+export {
+  extractThinkingFromTaggedStream,
+  extractThinkingFromTaggedText,
+  hasUnclosedThinkingTag,
+};
 
 export const extractThinkingCached = (message: unknown): string | null => {
   if (!message || typeof message !== "object") return extractThinking(message);

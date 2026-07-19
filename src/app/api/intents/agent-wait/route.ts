@@ -6,6 +6,16 @@ import {
 
 export const runtime = "nodejs";
 
+const AGENT_WAIT_TRANSPORT_TIMEOUT_OVERHEAD_MS = 5_000;
+
+const resolveAgentWaitTransportTimeoutMs = (timeoutMs: number | undefined): number => {
+  if (typeof timeoutMs !== "number") return LONG_RUNNING_GATEWAY_INTENT_TIMEOUT_MS;
+  return Math.min(
+    LONG_RUNNING_GATEWAY_INTENT_TIMEOUT_MS,
+    timeoutMs + AGENT_WAIT_TRANSPORT_TIMEOUT_OVERHEAD_MS
+  );
+};
+
 export async function POST(request: Request) {
   const parsed = await parseIntentBody(request);
   if (parsed instanceof Response) return parsed;
@@ -23,6 +33,6 @@ export async function POST(request: Request) {
     runId,
     ...(typeof timeoutMs === "number" ? { timeoutMs } : {}),
   }, {
-    timeoutMs: typeof timeoutMs === "number" ? timeoutMs : LONG_RUNNING_GATEWAY_INTENT_TIMEOUT_MS,
+    timeoutMs: resolveAgentWaitTransportTimeoutMs(timeoutMs),
   });
 }

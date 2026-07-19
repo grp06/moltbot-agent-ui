@@ -71,9 +71,10 @@ export function useChatInteractionController(
 
   const flushPendingDraft = useCallback(
     (agentId: string | null) => {
-      const hasPendingValue = Boolean(agentId && pendingDraftValuesRef.current.has(agentId));
+      const key = agentId?.trim() ?? "";
+      const hasPendingValue = Boolean(key && pendingDraftValuesRef.current.has(key));
       const flushIntent = planDraftFlushIntent({
-        agentId,
+        agentId: key || null,
         hasPendingValue,
       });
       if (flushIntent.kind !== "flush") return;
@@ -150,39 +151,52 @@ export function useChatInteractionController(
     }
   }, []);
 
+  const discardPendingDraft = useCallback((agentId: string) => {
+    const key = agentId.trim();
+    if (!key) return;
+    const timer = pendingDraftTimersRef.current.get(key) ?? null;
+    if (timer !== null) {
+      window.clearTimeout(timer);
+      pendingDraftTimersRef.current.delete(key);
+    }
+    pendingDraftValuesRef.current.delete(key);
+  }, []);
+
   const handleDraftChange = useCallback(
     (agentId: string, value: string) => {
-      pendingDraftValuesRef.current.set(agentId, value);
-      const existingTimer = pendingDraftTimersRef.current.get(agentId) ?? null;
+      const key = agentId.trim();
+      if (!key) return;
+      pendingDraftValuesRef.current.set(key, value);
+      const existingTimer = pendingDraftTimersRef.current.get(key) ?? null;
       if (existingTimer !== null) {
         window.clearTimeout(existingTimer);
       }
 
       const timerIntent = planDraftTimerIntent({
-        agentId,
+        agentId: key,
         delayMs: params.draftDebounceMs,
       });
       if (timerIntent.kind !== "schedule") {
-        pendingDraftTimersRef.current.delete(agentId);
+        pendingDraftTimersRef.current.delete(key);
         return;
       }
 
       const timer = window.setTimeout(() => {
-        pendingDraftTimersRef.current.delete(agentId);
-        const pendingValue = pendingDraftValuesRef.current.get(agentId);
+        pendingDraftTimersRef.current.delete(key);
+        const pendingValue = pendingDraftValuesRef.current.get(key);
         const flushIntent = planDraftFlushIntent({
-          agentId,
+          agentId: key,
           hasPendingValue: pendingValue !== undefined,
         });
         if (flushIntent.kind !== "flush" || pendingValue === undefined) return;
-        pendingDraftValuesRef.current.delete(agentId);
+        pendingDraftValuesRef.current.delete(key);
         params.dispatch({
           type: "updateAgent",
-          agentId,
+          agentId: key,
           patch: { draft: pendingValue },
         });
       }, timerIntent.delayMs);
-      pendingDraftTimersRef.current.set(agentId, timer);
+      pendingDraftTimersRef.current.set(key, timer);
     },
     [params]
   );
@@ -191,12 +205,7 @@ export function useChatInteractionController(
     async (agentId: string, sessionKey: string, message: string) => {
       const trimmed = message.trim();
       if (!trimmed) return;
-      const pendingDraftTimer = pendingDraftTimersRef.current.get(agentId) ?? null;
-      if (pendingDraftTimer !== null) {
-        window.clearTimeout(pendingDraftTimer);
-        pendingDraftTimersRef.current.delete(agentId);
-      }
-      pendingDraftValuesRef.current.delete(agentId);
+      discardPendingDraft(agentId);
       const agent =
         params.agents.find((entry) => entry.agentId === agentId) ??
         params.getAgents().find((entry) => entry.agentId === agentId) ??
@@ -230,7 +239,7 @@ export function useChatInteractionController(
         clearRunTracking: (runId) => params.clearRunTracking(runId),
       });
     },
-    [clearPendingLivePatch, params]
+    [clearPendingLivePatch, discardPendingDraft, params]
   );
 
   const removeQueuedMessage = useCallback(
@@ -359,6 +368,8 @@ export function useChatInteractionController(
           key: newSessionIntent.sessionKey,
         });
         const patch = buildNewSessionAgentPatch(agent);
+        discardPendingDraft(agentId);
+        clearPendingLivePatch(agentId);
         params.clearRunTracking(agent.runId);
         params.clearHistoryInFlight(newSessionIntent.sessionKey);
         params.clearSpecialUpdateMarker(agentId);
@@ -380,7 +391,7 @@ export function useChatInteractionController(
         });
       }
     },
-    [params]
+    [clearPendingLivePatch, discardPendingDraft, params]
   );
 
   return {

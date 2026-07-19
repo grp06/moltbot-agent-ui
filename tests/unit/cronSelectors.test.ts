@@ -60,6 +60,16 @@ describe("cron selectors", () => {
     expect(filterCronJobsForAgent(jobs, "  agent-1  ").map((job) => job.id)).toEqual(["trimmed"]);
     expect(resolveLatestCronJobForAgent(jobs, "  agent-1  ")?.id).toBe("trimmed");
   });
+
+  it("matches_agent_ids_case_insensitively_after_gateway_normalization", () => {
+    const jobs = [
+      buildJob({ id: "owned", agentId: "Agent-1", updatedAtMs: 20 }),
+      buildJob({ id: "other", agentId: "agent-2", updatedAtMs: 30 }),
+    ];
+
+    expect(filterCronJobsForAgent(jobs, "agent-1").map((job) => job.id)).toEqual(["owned"]);
+    expect(resolveLatestCronJobForAgent(jobs, "AGENT-1")?.id).toBe("owned");
+  });
 });
 
 describe("cron formatting", () => {

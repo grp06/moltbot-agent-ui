@@ -288,14 +288,11 @@ export function createGatewayRuntimeEventHandler(
     const activeRunId = agent?.runId?.trim() ?? "";
     const role = resolveRole(payload.message);
     const nowMs = now();
-    const allowAbortedRunMismatchRecovery =
-      payload.state === "aborted" && agent?.status === "running";
 
     if (
       payload.runId &&
       activeRunId &&
-      activeRunId !== payload.runId &&
-      !allowAbortedRunMismatchRecovery
+      activeRunId !== payload.runId
     ) {
       clearRunTracking(payload.runId);
       return;

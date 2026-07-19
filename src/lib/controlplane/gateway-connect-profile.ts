@@ -40,11 +40,17 @@ const OPERATOR_SCOPES = [
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === "object" && !Array.isArray(value));
 
+const normalizeParsedHostname = (hostname: string): string =>
+  hostname.trim().toLowerCase().replace(/^\[(.*)\]$/, "$1");
+
 const resolveOriginForUpstream = (upstreamUrl: string): string => {
   const url = new URL(upstreamUrl);
   const proto = url.protocol === "wss:" ? "https:" : "http:";
+  const normalizedHostname = normalizeParsedHostname(url.hostname);
   const hostname =
-    url.hostname === "127.0.0.1" || url.hostname === "::1" || url.hostname === "0.0.0.0"
+    normalizedHostname === "127.0.0.1" ||
+    normalizedHostname === "::1" ||
+    normalizedHostname === "0.0.0.0"
       ? "localhost"
       : url.hostname;
   const host = url.port ? `${hostname}:${url.port}` : hostname;

@@ -10,6 +10,8 @@ import type {
 } from "@/lib/controlplane/domain-runtime-client";
 
 import { hydrateDomainHistoryWindow } from "@/features/agents/operations/domainHistoryHydration";
+import { buildReconcileTerminalPatch } from "@/features/agents/operations/fleetLifecycleWorkflow";
+import { readCachedHistoryWindow, writeCachedHistoryWindow } from "@/features/agents/operations/historyWindowCache";
 import {
   loadDomainAgentHistoryWindow,
   loadDomainAgentPreviewWindow,
@@ -19,6 +21,17 @@ import { fetchJson } from "@/lib/http";
 vi.mock("@/features/agents/operations/domainHistoryHydration", () => ({
   hydrateDomainHistoryWindow: vi.fn(),
 }));
+
+vi.mock("@/features/agents/operations/historyWindowCache", async () => {
+  const actual = await vi.importActual<typeof import("@/features/agents/operations/historyWindowCache")>(
+    "@/features/agents/operations/historyWindowCache"
+  );
+  return {
+    ...actual,
+    readCachedHistoryWindow: vi.fn(),
+    writeCachedHistoryWindow: vi.fn(),
+  };
+});
 
 vi.mock("@/lib/controlplane/domain-runtime-client", () => ({
   loadDomainAgentHistoryWindow: vi.fn(),
@@ -80,12 +93,16 @@ const renderController = (
   overrides?: Partial<Parameters<typeof useRuntimeSyncController>[0]>
 ): RenderControllerContext => {
   const dispatch = vi.fn();
+  const agentWait = vi.fn(async () => ({ status: "running" }));
+  const clearRunTracking = vi.fn();
 
   let currentParams: Parameters<typeof useRuntimeSyncController>[0] = {
     status: "connected",
     agents: [createAgent({ historyLoadedAt: 1000 })],
     focusedAgentId: null,
     dispatch,
+    runtimeWriteTransport: { agentWait },
+    clearRunTracking,
     isDisconnectLikeError: () => false,
     ...(overrides ?? {}),
   };
@@ -166,17 +183,23 @@ describe("useRuntimeSyncController", () => {
   const mockedLoadDomainAgentHistoryWindow = vi.mocked(loadDomainAgentHistoryWindow);
   const mockedLoadDomainAgentPreviewWindow = vi.mocked(loadDomainAgentPreviewWindow);
   const mockedHydrateDomainHistoryWindow = vi.mocked(hydrateDomainHistoryWindow);
+  const mockedReadCachedHistoryWindow = vi.mocked(readCachedHistoryWindow);
+  const mockedWriteCachedHistoryWindow = vi.mocked(writeCachedHistoryWindow);
   const mockedFetchJson = vi.mocked(fetchJson);
 
   beforeEach(() => {
     mockedLoadDomainAgentHistoryWindow.mockReset();
     mockedLoadDomainAgentPreviewWindow.mockReset();
     mockedHydrateDomainHistoryWindow.mockReset();
+    mockedReadCachedHistoryWindow.mockReset();
+    mockedWriteCachedHistoryWindow.mockReset();
     mockedFetchJson.mockReset();
 
     mockedLoadDomainAgentHistoryWindow.mockResolvedValue(createHistoryResult());
     mockedLoadDomainAgentPreviewWindow.mockResolvedValue(createPreviewResult());
     mockedHydrateDomainHistoryWindow.mockReturnValue({ historyLoadedAt: 1000 });
+    mockedReadCachedHistoryWindow.mockResolvedValue(null);
+    mockedWriteCachedHistoryWindow.mockResolvedValue(undefined);
     mockedFetchJson.mockResolvedValue({ summary: {}, freshness: {} });
   });
 
@@ -198,6 +221,45 @@ describe("useRuntimeSyncController", () => {
     expect(mockedFetchJson).toHaveBeenCalledWith("/api/runtime/summary", {
       cache: "no-store",
     });
+  });
+
+  it("reconciles terminal running agents through the domain wait transport", async () => {
+    const agentWait = vi.fn(async () => ({ status: "ok" }));
+    const clearRunTracking = vi.fn();
+    const ctx = renderController({
+      status: "connected",
+      agents: [
+        createAgent({
+          status: "running",
+          runId: "run-1",
+          runStartedAt: 1234,
+          historyLoadedAt: 1000,
+        }),
+      ],
+      focusedAgentId: null,
+      runtimeWriteTransport: { agentWait },
+      clearRunTracking,
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(agentWait).toHaveBeenCalledWith({ runId: "run-1", timeoutMs: 1 });
+    expect(clearRunTracking).toHaveBeenCalledWith("run-1");
+    expect(ctx.dispatch).toHaveBeenCalledWith({
+      type: "updateAgent",
+      agentId: "agent-1",
+      patch: buildReconcileTerminalPatch({ outcome: "ok" }),
+    });
+    expect(mockedLoadDomainAgentHistoryWindow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "agent-1",
+        sessionKey: "agent:agent-1:main",
+      })
+    );
   });
 
   it("bootstraps focused agent history when connected and history is missing", async () => {
@@ -333,6 +395,53 @@ describe("useRuntimeSyncController", () => {
     );
   });
 
+  it("persists compact history under the same tool-inclusion key used for loading", async () => {
+    renderController({
+      status: "disconnected",
+      gatewayUrl: "ws://gateway.example:18789",
+      agents: [
+        createAgent({
+          historyLoadedAt: 1234,
+          historyFetchLimit: 50,
+          historyFetchedCount: 2,
+          historyVisibleTurnLimit: 2,
+          showThinkingTraces: false,
+          toolCallingEnabled: true,
+          transcriptEntries: [
+            {
+              entryId: "entry-1",
+              role: "assistant",
+              kind: "assistant",
+              text: "cached reply",
+              sessionKey: "agent:agent-1:main",
+              runId: null,
+              source: "history",
+              timestampMs: 1234,
+              sequenceKey: 1,
+              confirmed: true,
+              fingerprint: "fingerprint-1",
+            },
+          ],
+        }),
+      ],
+      focusedAgentId: null,
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mockedWriteCachedHistoryWindow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gatewayUrl: "ws://gateway.example:18789",
+        agentId: "agent-1",
+        sessionKey: "agent:agent-1:main",
+        includeThinking: false,
+        includeTools: false,
+      })
+    );
+  });
+
   it("dedupes in-flight history requests by session key", async () => {
     let resolveHistory!: (value: DomainAgentHistoryResult) => void;
     const historyPromise = new Promise<DomainAgentHistoryResult>((resolve) => {
@@ -399,6 +508,29 @@ describe("useRuntimeSyncController", () => {
 
     act(() => {
       ctx.getValue().clearHistoryInFlight("agent:agent-1:main");
+    });
+
+    await act(async () => {
+      await ctx.getValue().loadAgentHistory("agent-1", { reason: "bootstrap" });
+    });
+    expect(mockedLoadDomainAgentHistoryWindow).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not reuse in-memory history cache across gateway URLs", async () => {
+    const ctx = renderController({
+      status: "disconnected",
+      gatewayUrl: "ws://gateway-old.example:18789",
+      agents: [createAgent({ historyLoadedAt: 1234, sessionKey: "agent:agent-1:main" })],
+      focusedAgentId: null,
+    });
+
+    await act(async () => {
+      await ctx.getValue().loadAgentHistory("agent-1", { reason: "bootstrap" });
+    });
+    expect(mockedLoadDomainAgentHistoryWindow).toHaveBeenCalledTimes(1);
+
+    ctx.rerenderWith({
+      gatewayUrl: "ws://gateway-new.example:18789",
     });
 
     await act(async () => {

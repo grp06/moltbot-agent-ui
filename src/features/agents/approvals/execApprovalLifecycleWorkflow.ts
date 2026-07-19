@@ -7,6 +7,8 @@ import {
 import type { AgentState } from "@/features/agents/state/store";
 import type { EventFrame } from "@/lib/gateway/gateway-frames";
 import { GatewayResponseError } from "@/lib/gateway/errors";
+import { resolveSafeAgentId } from "@/lib/agents/agentIds";
+import { resolveSafeSessionKey } from "@/lib/gateway/session-keys";
 
 export type ExecApprovalEventEffects = {
   scopedUpserts: Array<{ agentId: string; approval: PendingExecApproval }>;
@@ -96,19 +98,22 @@ export const resolveExecApprovalFollowUpIntent = (params: {
   if (!params.approval) {
     return NO_FOLLOW_UP_INTENT;
   }
-  const scopedAgentId = params.approval.agentId?.trim() ?? "";
+  const scopedAgentId = resolveSafeAgentId(params.approval.agentId) ?? "";
+  const scopedAgent =
+    scopedAgentId ? params.agents.find((agent) => agent.agentId === scopedAgentId) ?? null : null;
+  const approvalSessionKey = resolveSafeSessionKey(params.approval.sessionKey) ?? "";
   const sessionAgentId =
-    params.approval.sessionKey?.trim()
+    approvalSessionKey
       ? (params.agents.find(
-          (agent) => agent.sessionKey.trim() === params.approval?.sessionKey?.trim()
+          (agent) => agent.sessionKey.trim() === approvalSessionKey
         )?.agentId ?? "")
       : "";
-  const targetAgentId = scopedAgentId || sessionAgentId;
+  const targetAgentId = scopedAgent?.agentId ?? sessionAgentId;
   if (!targetAgentId) {
     return NO_FOLLOW_UP_INTENT;
   }
   const targetSessionKey =
-    params.approval.sessionKey?.trim() ||
+    approvalSessionKey ||
     params.agents.find((agent) => agent.agentId === targetAgentId)?.sessionKey?.trim() ||
     "";
   const followUpMessage = params.followUpMessage.trim();

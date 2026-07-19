@@ -172,6 +172,35 @@ describe("SQLiteControlPlaneProjectionStore", () => {
     store.close();
   });
 
+  it("does not index malformed agent ids from gateway event payloads", () => {
+    const store = new SQLiteControlPlaneProjectionStore(makeDbPath());
+    store.applyDomainEvent({
+      type: "gateway.event",
+      event: "runtime.delta",
+      seq: 1,
+      payload: { sessionKey: "agent:../alpha:main", text: "bad session" },
+      asOf: "2026-02-28T02:01:01.000Z",
+    });
+    store.applyDomainEvent({
+      type: "gateway.event",
+      event: "runtime.delta",
+      seq: 2,
+      payload: { agentId: "../alpha", text: "bad direct" },
+      asOf: "2026-02-28T02:01:02.000Z",
+    });
+    store.applyDomainEvent({
+      type: "gateway.event",
+      event: "runtime.delta",
+      seq: 3,
+      payload: { sessionKey: "agent:alpha:main", text: "good" },
+      asOf: "2026-02-28T02:01:03.000Z",
+    });
+
+    expect(store.readAgentOutboxBefore("alpha", 4, 10).map((entry) => entry.id)).toEqual([3]);
+
+    store.close();
+  });
+
   it("backfills legacy outbox rows into agent index and marks non-agent rows", () => {
     const dbPath = makeDbPath();
     const db = new Database(dbPath);

@@ -761,7 +761,7 @@ describe("gateway runtime event handler (chat)", () => {
     expect(requestHistoryRefresh).not.toHaveBeenCalled();
   });
 
-  it("applies aborted terminal cleanup even when runId mismatches active run", () => {
+  it("ignores stale aborted terminal events for non-active runIds", () => {
     const agents = [
       createAgent({
         status: "running",
@@ -772,10 +772,11 @@ describe("gateway runtime event handler (chat)", () => {
       }),
     ];
     const dispatch = vi.fn();
+    const queueLivePatch = vi.fn();
     const handler = createGatewayRuntimeEventHandler({
       getAgents: () => agents,
       dispatch,
-      queueLivePatch: vi.fn(),
+      queueLivePatch,
       clearPendingLivePatch: vi.fn(),
       now: () => 1000,
       requestHistoryRefresh: vi.fn(async () => {}),
@@ -796,14 +797,34 @@ describe("gateway runtime event handler (chat)", () => {
       },
     });
 
-    expect(dispatch).toHaveBeenCalledWith(
+    expect(dispatch).not.toHaveBeenCalledWith(
       expect.objectContaining({ type: "appendOutput", agentId: "agent-1", line: "Run aborted." })
     );
-    expect(dispatch).toHaveBeenCalledWith(
+    expect(dispatch).not.toHaveBeenCalledWith(
       expect.objectContaining({
         type: "updateAgent",
         agentId: "agent-1",
         patch: expect.objectContaining({ status: "idle", runId: null }),
+      })
+    );
+
+    handler.handleEvent({
+      type: "event",
+      event: "chat",
+      payload: {
+        runId: "run-active",
+        sessionKey: agents[0]!.sessionKey,
+        state: "delta",
+        message: { role: "assistant", content: "still active" },
+      },
+    });
+
+    expect(queueLivePatch).toHaveBeenCalledWith(
+      "agent-1",
+      expect.objectContaining({
+        runId: "run-active",
+        streamText: "still active",
+        status: "running",
       })
     );
   });

@@ -5,6 +5,8 @@ import { ControlPlaneGatewayError } from "@/lib/controlplane/openclaw-adapter";
 import { serializeRuntimeInitFailure } from "@/lib/controlplane/runtime-init-errors";
 import { bootstrapDomainRuntime } from "@/lib/controlplane/runtime-route-bootstrap";
 import { extractText, stripUiMetadata } from "@/lib/text/message-extract";
+import { isSafeAgentId } from "@/lib/agents/agentIds";
+import { sessionKeyBelongsToAgent } from "@/lib/gateway/session-keys";
 
 export const runtime = "nodejs";
 
@@ -106,6 +108,15 @@ export async function GET(
   request: Request,
   context: { params: Promise<{ agentId: string }> }
 ) {
+  const { agentId } = await context.params;
+  const normalizedAgentId = agentId.trim();
+  if (!normalizedAgentId) {
+    return NextResponse.json({ error: "agentId is required." }, { status: 400 });
+  }
+  if (!isSafeAgentId(normalizedAgentId)) {
+    return NextResponse.json({ error: `Invalid agentId: ${normalizedAgentId}` }, { status: 400 });
+  }
+
   const bootstrap = await bootstrapDomainRuntime();
   if (bootstrap.kind === "mode-disabled") {
     return NextResponse.json({ enabled: false, error: "domain_api_mode_disabled" }, { status: 404 });
@@ -122,15 +133,15 @@ export async function GET(
   const controlPlane = bootstrap.runtime;
   const startError = bootstrap.kind === "start-failed" ? bootstrap.message : null;
 
-  const { agentId } = await context.params;
-  const normalizedAgentId = agentId.trim();
-  if (!normalizedAgentId) {
-    return NextResponse.json({ error: "agentId is required." }, { status: 400 });
-  }
-
   const url = new URL(request.url);
   const sessionKeyRaw = (url.searchParams.get("sessionKey") ?? "").trim();
   const sessionKey = sessionKeyRaw || `agent:${normalizedAgentId}:main`;
+  if (!sessionKeyBelongsToAgent(sessionKey, normalizedAgentId)) {
+    return NextResponse.json(
+      { error: "sessionKey does not match agentId." },
+      { status: 400 }
+    );
+  }
   const limit = resolveBoundedPositiveInt({
     raw: url.searchParams.get("limit"),
     fallback: DEFAULT_LIMIT,
@@ -161,7 +172,7 @@ export async function GET(
     previews.find((entry) => {
       const key = typeof entry?.key === "string" ? entry.key.trim() : "";
       return key === sessionKey;
-    }) ?? previews[0];
+    }) ?? null;
   const rawItems = Array.isArray(matched?.items) ? matched.items : [];
 
   return NextResponse.json({

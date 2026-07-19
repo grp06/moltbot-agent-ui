@@ -6,6 +6,7 @@ import {
   resolveGatewaySshTargetFromGatewayUrl,
   runSshJson,
 } from "@/lib/ssh/gateway-host";
+import { resolveStateDir } from "@/lib/clawdbot/paths";
 import { loadStudioSettings } from "@/lib/studio/settings-store";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -22,6 +23,8 @@ const MIME_BY_EXT: Record<string, string> = {
   ".gif": "image/gif",
   ".webp": "image/webp",
 };
+
+const ALLOWED_MEDIA_MIMES = new Set(Object.values(MIME_BY_EXT));
 
 const expandTildeLocal = (value: string): string => {
   const trimmed = value.trim();
@@ -43,7 +46,9 @@ const validateRawMediaPath = (raw: string): { trimmed: string; mime: string } =>
   return { trimmed, mime };
 };
 
-const resolveAndValidateLocalMediaPath = (raw: string): { resolved: string; mime: string } => {
+const resolveAndValidateLocalMediaPath = (
+  raw: string
+): { resolved: string; allowedRoot: string; mime: string } => {
   const { trimmed, mime } = validateRawMediaPath(raw);
 
   const expanded = expandTildeLocal(trimmed);
@@ -53,13 +58,13 @@ const resolveAndValidateLocalMediaPath = (raw: string): { resolved: string; mime
 
   const resolved = path.resolve(expanded);
 
-  const allowedRoot = path.join(os.homedir(), ".openclaw");
+  const allowedRoot = path.resolve(resolveStateDir());
   const allowedPrefix = `${allowedRoot}${path.sep}`;
   if (!(resolved === allowedRoot || resolved.startsWith(allowedPrefix))) {
     throw new Error(`Refusing to read media outside ${allowedRoot}`);
   }
 
-  return { resolved, mime };
+  return { resolved, allowedRoot, mime };
 };
 
 const validateRemoteMediaPath = (raw: string): { remotePath: string; mime: string } => {
@@ -83,15 +88,38 @@ const validateRemoteMediaPath = (raw: string): { remotePath: string; mime: strin
   return { remotePath: trimmed, mime };
 };
 
-const readLocalMedia = async (resolvedPath: string): Promise<{ bytes: Buffer; size: number }> => {
-  const stat = await fs.stat(resolvedPath);
+const resolveExistingRealPath = async (candidate: string): Promise<string> => {
+  try {
+    return await fs.realpath(candidate);
+  } catch {
+    return path.resolve(candidate);
+  }
+};
+
+const assertPathUnderRoot = (candidate: string, allowedRoot: string) => {
+  const allowedPrefix = allowedRoot.endsWith(path.sep) ? allowedRoot : `${allowedRoot}${path.sep}`;
+  if (candidate !== allowedRoot && !candidate.startsWith(allowedPrefix)) {
+    throw new Error(`Refusing to read media outside ${allowedRoot}`);
+  }
+};
+
+const readLocalMedia = async (
+  resolvedPath: string,
+  allowedRoot: string
+): Promise<{ bytes: Buffer; size: number }> => {
+  const [realAllowedRoot, realResolvedPath] = await Promise.all([
+    resolveExistingRealPath(allowedRoot),
+    fs.realpath(resolvedPath),
+  ]);
+  assertPathUnderRoot(realResolvedPath, realAllowedRoot);
+  const stat = await fs.stat(realResolvedPath);
   if (!stat.isFile()) {
     throw new Error("path is not a file");
   }
   if (stat.size > MAX_MEDIA_BYTES) {
     throw new Error(`media file too large (${stat.size} bytes)`);
   }
-  const buf = await fs.readFile(resolvedPath);
+  const buf = await fs.readFile(realResolvedPath);
   return { bytes: buf, size: stat.size };
 };
 
@@ -149,11 +177,11 @@ PY
 `;
 
 const resolveSshTarget = (): string | null => {
+  const configured = resolveConfiguredSshTarget(process.env);
+  if (configured) return configured;
   const settings = loadStudioSettings();
   const gatewayUrl = settings.gateway?.url ?? "";
   if (isLocalGatewayUrl(gatewayUrl)) return null;
-  const configured = resolveConfiguredSshTarget(process.env);
-  if (configured) return configured;
   return resolveGatewaySshTargetFromGatewayUrl(gatewayUrl, process.env);
 };
 
@@ -165,8 +193,8 @@ export async function GET(request: Request) {
     const sshTarget = resolveSshTarget();
 
     if (!sshTarget) {
-      const { resolved, mime } = resolveAndValidateLocalMediaPath(rawPath);
-      const { bytes, size } = await readLocalMedia(resolved);
+      const { resolved, allowedRoot, mime } = resolveAndValidateLocalMediaPath(rawPath);
+      const { bytes, size } = await readLocalMedia(resolved, allowedRoot);
       const body = new Blob([Uint8Array.from(bytes)], { type: mime });
       return new Response(body, {
         headers: {
@@ -199,7 +227,11 @@ export async function GET(request: Request) {
     }
 
     const buf = Buffer.from(b64, "base64");
-    const responseMime = payload.mime || mime;
+    if (buf.length > MAX_MEDIA_BYTES) {
+      throw new Error(`media file too large (${buf.length} bytes)`);
+    }
+    const remoteMime = typeof payload.mime === "string" ? payload.mime : "";
+    const responseMime = ALLOWED_MEDIA_MIMES.has(remoteMime) ? remoteMime : mime;
     const body = new Blob([Uint8Array.from(buf)], { type: responseMime });
 
     return new Response(body, {

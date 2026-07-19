@@ -4,12 +4,14 @@ import {
   ensureDomainIntentRuntime,
   parseIntentBody,
 } from "@/lib/controlplane/intent-route";
+import { isSafeAgentId } from "@/lib/agents/agentIds";
 import {
   upsertAgentExecApprovalsPolicyViaRuntime,
   type ExecutionRoleId,
 } from "@/lib/controlplane/exec-approvals";
 import { ControlPlaneGatewayError } from "@/lib/controlplane/openclaw-adapter";
 import type { ControlPlaneRuntime } from "@/lib/controlplane/runtime";
+import { sessionKeyBelongsToAgent } from "@/lib/gateway/session-keys";
 
 export const runtime = "nodejs";
 
@@ -24,6 +26,11 @@ type GatewayAgentToolsOverrides = {
   allow?: string[];
   alsoAllow?: string[];
   deny?: string[];
+};
+type ToolGroupOverrideInput = {
+  runtimeEnabled: boolean;
+  webEnabled: boolean;
+  fsEnabled: boolean;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -141,6 +148,19 @@ const resolveSessionExecSettingsForRole = (params: {
   return { execHost, execSecurity: "allowlist" as const, execAsk: "always" as const };
 };
 
+const resolveConfigAgentSandboxMode = (
+  config: Record<string, unknown>,
+  agentId: string
+): string => {
+  const list = readConfigAgentList(config);
+  const configEntry = list.find((entry) => entry.id === agentId) ?? null;
+  const sandboxRaw =
+    configEntry && isRecord(configEntry.sandbox)
+      ? (configEntry.sandbox as Record<string, unknown>)
+      : null;
+  return typeof sandboxRaw?.mode === "string" ? sandboxRaw.mode : "";
+};
+
 const isConfigConflict = (err: unknown): boolean => {
   if (!(err instanceof ControlPlaneGatewayError)) return false;
   if (err.code.trim().toUpperCase() !== "INVALID_REQUEST") return false;
@@ -180,25 +200,31 @@ const applyAgentToolsOverrides = async (params: {
   baseConfig: Record<string, unknown>;
   snapshotHash?: string;
   snapshotExists?: boolean;
-  overrides: GatewayAgentToolsOverrides;
+  toolGroups: ToolGroupOverrideInput;
   attempt?: number;
-}): Promise<void> => {
+}): Promise<{ sandboxMode: string }> => {
   const attempt = params.attempt ?? 0;
   const list = readConfigAgentList(params.baseConfig);
   const nextList = upsertConfigAgentEntry(list, params.agentId, (entry) => {
     const next: ConfigAgentEntry = { ...entry, id: params.agentId };
+    const overrides = resolveToolGroupOverrides({
+      existingTools: next.tools,
+      runtimeEnabled: params.toolGroups.runtimeEnabled,
+      webEnabled: params.toolGroups.webEnabled,
+      fsEnabled: params.toolGroups.fsEnabled,
+    }).tools;
     const currentTools = isRecord(next.tools) ? { ...next.tools } : {};
-    const allow = normalizeToolList(params.overrides.allow);
+    const allow = normalizeToolList(overrides.allow);
     if (allow !== undefined) {
       currentTools.allow = allow;
       delete currentTools.alsoAllow;
     }
-    const alsoAllow = normalizeToolList(params.overrides.alsoAllow);
+    const alsoAllow = normalizeToolList(overrides.alsoAllow);
     if (alsoAllow !== undefined) {
       currentTools.alsoAllow = alsoAllow;
       delete currentTools.allow;
     }
-    const deny = normalizeToolList(params.overrides.deny);
+    const deny = normalizeToolList(overrides.deny);
     if (deny !== undefined) {
       currentTools.deny = deny;
     }
@@ -213,6 +239,9 @@ const applyAgentToolsOverrides = async (params: {
   });
   try {
     await params.runtime.callGateway("config.set", payload);
+    return {
+      sandboxMode: resolveConfigAgentSandboxMode(nextConfig, params.agentId),
+    };
   } catch (err) {
     if (attempt >= 1 || !isConfigConflict(err)) {
       throw err;
@@ -221,7 +250,7 @@ const applyAgentToolsOverrides = async (params: {
     const retryConfig = isRecord(retrySnapshot.config)
       ? (retrySnapshot.config as Record<string, unknown>)
       : {};
-    await applyAgentToolsOverrides({
+    return await applyAgentToolsOverrides({
       ...params,
       baseConfig: retryConfig,
       snapshotHash: retrySnapshot.hash,
@@ -247,6 +276,15 @@ export async function POST(request: Request) {
   if (!agentId || !sessionKey) {
     return NextResponse.json({ error: "agentId and sessionKey are required." }, { status: 400 });
   }
+  if (!isSafeAgentId(agentId)) {
+    return NextResponse.json({ error: `Invalid agentId: ${agentId}` }, { status: 400 });
+  }
+  if (!sessionKeyBelongsToAgent(sessionKey, agentId)) {
+    return NextResponse.json(
+      { error: "sessionKey does not match agentId." },
+      { status: 400 }
+    );
+  }
   if (commandMode !== "off" && commandMode !== "ask" && commandMode !== "auto") {
     return NextResponse.json({ error: "commandMode must be one of: off, ask, auto." }, { status: 400 });
   }
@@ -263,26 +301,17 @@ export async function POST(request: Request) {
     const role = resolveRoleForCommandMode(commandMode as CommandModeId);
     const snapshot = await runtimeOrError.callGateway<GatewayConfigSnapshot>("config.get", {});
     const baseConfig = isRecord(snapshot.config) ? (snapshot.config as Record<string, unknown>) : {};
-    const list = readConfigAgentList(baseConfig);
-    const configEntry = list.find((entry) => entry.id === agentId) ?? null;
-    const sandboxRaw =
-      configEntry && isRecord(configEntry.sandbox) ? (configEntry.sandbox as Record<string, unknown>) : null;
-    const sandboxMode = typeof sandboxRaw?.mode === "string" ? sandboxRaw.mode : "";
-    const toolsRaw = configEntry && isRecord(configEntry.tools) ? configEntry.tools : null;
-
-    const toolOverrides = resolveToolGroupOverrides({
-      existingTools: toolsRaw,
-      runtimeEnabled: role !== "conservative",
-      webEnabled: webAccess,
-      fsEnabled: fileTools,
-    });
-    await applyAgentToolsOverrides({
+    const { sandboxMode } = await applyAgentToolsOverrides({
       runtime: runtimeOrError,
       agentId,
       baseConfig,
       snapshotHash: snapshot.hash,
       snapshotExists: snapshot.exists,
-      overrides: toolOverrides.tools,
+      toolGroups: {
+        runtimeEnabled: role !== "conservative",
+        webEnabled: webAccess,
+        fsEnabled: fileTools,
+      },
     });
 
     const execSettings = resolveSessionExecSettingsForRole({ role, sandboxMode });

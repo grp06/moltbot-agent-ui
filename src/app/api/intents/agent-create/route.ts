@@ -3,12 +3,16 @@ import { NextResponse } from "next/server";
 import { ensureDomainIntentRuntime, parseIntentBody } from "@/lib/controlplane/intent-route";
 import { ControlPlaneGatewayError } from "@/lib/controlplane/openclaw-adapter";
 import { slugifyAgentName } from "@/lib/gateway/agentConfig";
+import { resolveSafeAgentId } from "@/lib/agents/agentIds";
 
 export const runtime = "nodejs";
 
 type GatewayConfigSnapshot = {
   path?: string | null;
 };
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value && typeof value === "object" && !Array.isArray(value));
 
 const dirnameLike = (value: string): string => {
   const lastSlash = value.lastIndexOf("/");
@@ -34,6 +38,13 @@ export async function POST(request: Request) {
   if (!name) {
     return NextResponse.json({ error: "name is required." }, { status: 400 });
   }
+  let agentIdGuess: string;
+  try {
+    agentIdGuess = slugifyAgentName(name);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Invalid agent name.";
+    return NextResponse.json({ error: message }, { status: 400 });
+  }
 
   const runtimeOrError = await ensureDomainIntentRuntime();
   if (runtimeOrError instanceof Response) {
@@ -54,12 +65,17 @@ export async function POST(request: Request) {
         `Gateway config path "${configPath}" is missing a directory; cannot compute workspace.`
       );
     }
-    const workspace = joinPathLike(stateDir, `workspace-${slugifyAgentName(name)}`);
+    const workspace = joinPathLike(stateDir, `workspace-${agentIdGuess}`);
     const payload = await runtimeOrError.callGateway("agents.create", {
       name,
       workspace,
     });
-    return NextResponse.json({ ok: true, payload });
+    const payloadRecord = isRecord(payload) ? payload : {};
+    const agentId = resolveSafeAgentId(payloadRecord.agentId);
+    if (!agentId) {
+      throw new Error("Gateway returned an invalid agents.create response (missing or invalid agentId).");
+    }
+    return NextResponse.json({ ok: true, payload: { ...payloadRecord, agentId } });
   } catch (err) {
     if (err instanceof ControlPlaneGatewayError) {
       if (err.code.trim().toUpperCase() === "GATEWAY_UNAVAILABLE") {

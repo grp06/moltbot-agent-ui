@@ -223,6 +223,7 @@ const AgentStudioPage = () => {
     localGatewayDefaults,
     localGatewayDefaultsHasToken,
     hasStoredToken,
+    gatewayCredentialScope,
     hasUnsavedChanges,
     installContext,
     statusReason,
@@ -251,8 +252,15 @@ const AgentStudioPage = () => {
   const runtimeStreamResumeKey = useMemo(() => {
     const normalizedGatewayUrl = gatewayUrl.trim();
     if (!normalizedGatewayUrl) return null;
-    return `domain:${normalizedGatewayUrl}`;
-  }, [gatewayUrl]);
+    const credentialScope = gatewayCredentialScope.trim();
+    return `domain:${normalizedGatewayUrl}:${credentialScope || "anonymous"}`;
+  }, [gatewayCredentialScope, gatewayUrl]);
+  const runtimeHistoryCacheScope = useMemo(() => {
+    const normalizedGatewayUrl = gatewayUrl.trim();
+    if (!normalizedGatewayUrl) return "";
+    const credentialScope = gatewayCredentialScope.trim();
+    return `${normalizedGatewayUrl}\u001f${credentialScope || "anonymous"}`;
+  }, [gatewayCredentialScope, gatewayUrl]);
   const runtimeWriteTransport = useMemo(
     () =>
       createRuntimeWriteTransport({
@@ -842,10 +850,14 @@ const AgentStudioPage = () => {
 
   const { loadAgentHistory, loadMoreAgentHistory, clearHistoryInFlight } = useRuntimeSyncController({
     status: coreStatus,
-    gatewayUrl,
+    gatewayUrl: runtimeHistoryCacheScope,
     agents,
     focusedAgentId,
     dispatch,
+    runtimeWriteTransport,
+    clearRunTracking: (runId) => {
+      runtimeEventHandlerRef.current?.clearRunTracking(runId);
+    },
     isDisconnectLikeError: isGatewayDisconnectLikeError,
   });
 
@@ -1492,6 +1504,7 @@ const AgentStudioPage = () => {
                     draftGatewayUrl={draftGatewayUrl}
                     token={token}
                     hasStoredToken={hasStoredToken}
+                    localGatewayDefaults={localGatewayDefaults}
                     localGatewayDefaultsHasToken={localGatewayDefaultsHasToken}
                     hasUnsavedChanges={hasUnsavedChanges}
                     status={gatewayStatus}

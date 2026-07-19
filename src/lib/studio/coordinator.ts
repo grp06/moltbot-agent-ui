@@ -15,6 +15,7 @@ export type StudioSettingsResponse = {
   };
   gatewayMeta?: {
     hasStoredToken: boolean;
+    credentialScope?: string;
   };
   installContext?: StudioInstallContext;
   domainApiModeEnabled?: boolean;

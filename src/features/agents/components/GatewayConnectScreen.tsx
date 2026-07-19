@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Check, Copy, Eye, EyeOff, Loader2 } from "lucide-react";
 import type { GatewayStatus } from "@/lib/gateway/gateway-status";
 import {
@@ -9,7 +9,11 @@ import {
   type StudioInstallContext,
   type StudioSetupScenario,
 } from "@/lib/studio/install-context";
-import type { StudioGatewaySettings } from "@/lib/studio/settings";
+import {
+  canUseLocalGatewayDefaultsForUrl,
+  normalizeGatewayUrl,
+  type StudioGatewaySettings,
+} from "@/lib/studio/settings";
 import { resolveGatewayStatusBadgeClass, resolveGatewayStatusLabel } from "./colorSemantics";
 
 type GatewayConnectScreenProps = {
@@ -83,12 +87,9 @@ export const GatewayConnectScreen = ({
       }),
     [draftGatewayUrl, installContext, savedGatewayUrl]
   );
-  const [selectedScenario, setSelectedScenario] = useState<StudioSetupScenario>(inferredScenario);
-  const [scenarioTouched, setScenarioTouched] = useState(false);
-  useEffect(() => {
-    if (scenarioTouched) return;
-    setSelectedScenario(inferredScenario);
-  }, [inferredScenario, scenarioTouched]);
+  const [selectedScenarioOverride, setSelectedScenarioOverride] =
+    useState<StudioSetupScenario | null>(null);
+  const selectedScenario = selectedScenarioOverride ?? inferredScenario;
   const localPort = useMemo(
     () => resolveLocalGatewayPort(draftGatewayUrl || savedGatewayUrl),
     [draftGatewayUrl, savedGatewayUrl]
@@ -97,6 +98,12 @@ export const GatewayConnectScreen = ({
     () => `openclaw gateway --port ${localPort}`,
     [localPort]
   );
+  const localGatewayDefaultsApplyToDraft =
+    localGatewayDefaultsHasToken &&
+    canUseLocalGatewayDefaultsForUrl(draftGatewayUrl || savedGatewayUrl, localGatewayDefaults?.url);
+  const storedTokenAppliesToDraft =
+    hasStoredToken &&
+    normalizeGatewayUrl(draftGatewayUrl || savedGatewayUrl) === normalizeGatewayUrl(savedGatewayUrl);
   const gatewayServeCommand = useMemo(
     () => `tailscale serve --yes --bg --https 443 http://127.0.0.1:${localPort}`,
     [localPort]
@@ -117,15 +124,15 @@ export const GatewayConnectScreen = ({
         gatewayUrl: draftGatewayUrl,
         installContext,
         scenario: selectedScenario,
-        hasStoredToken,
-        hasLocalGatewayToken: localGatewayDefaultsHasToken,
+        hasStoredToken: storedTokenAppliesToDraft,
+        hasLocalGatewayToken: localGatewayDefaultsApplyToDraft,
       }),
     [
       draftGatewayUrl,
-      hasStoredToken,
       installContext,
-      localGatewayDefaultsHasToken,
+      localGatewayDefaultsApplyToDraft,
       selectedScenario,
+      storedTokenAppliesToDraft,
     ]
   );
   const studioCliUpdateWarning = useMemo(() => {
@@ -174,16 +181,15 @@ export const GatewayConnectScreen = ({
       : status === "connecting" || status === "reconnecting"
         ? "ui-dot-status-connecting"
         : "ui-dot-status-disconnected";
-  const tokenHelper = hasStoredToken
+  const tokenHelper = storedTokenAppliesToDraft
     ? "A token is already stored on this Studio host. Leave this blank to keep it."
-    : localGatewayDefaultsHasToken
-      ? "A local OpenClaw token is available on this host. Leave this blank to use it."
+    : localGatewayDefaultsApplyToDraft
+      ? "A local OpenClaw token is available for this localhost gateway. Leave this blank to use it."
       : "Enter the gateway token Studio should use.";
   const remoteStudio = isStudioLikelyRemote(installContext);
 
   const setScenario = (value: StudioSetupScenario) => {
-    setScenarioTouched(true);
-    setSelectedScenario(value);
+    setSelectedScenarioOverride(value);
   };
 
   const applyLoopbackUrl = () => {
@@ -291,7 +297,11 @@ export const GatewayConnectScreen = ({
               type={showToken ? "text" : "password"}
               value={token}
               onChange={(event) => onTokenChange(event.target.value)}
-              placeholder={hasStoredToken || localGatewayDefaultsHasToken ? "keep existing token" : "gateway token"}
+              placeholder={
+                storedTokenAppliesToDraft || localGatewayDefaultsApplyToDraft
+                  ? "keep existing token"
+                  : "gateway token"
+              }
               spellCheck={false}
             />
             <button

@@ -5,6 +5,7 @@ import type {
   CronSessionTarget,
   CronWakeMode,
 } from "@/lib/cron/types";
+import { isSafeAgentId } from "@/lib/agents/agentIds";
 
 export type CronCreateTemplateId =
   | "morning-brief"
@@ -52,6 +53,9 @@ const resolveAgentId = (agentId: string) => {
   const trimmed = agentId.trim();
   if (!trimmed) {
     throw new Error("Agent id is required.");
+  }
+  if (!isSafeAgentId(trimmed)) {
+    throw new Error(`Invalid agentId: ${trimmed}`);
   }
   return trimmed;
 };

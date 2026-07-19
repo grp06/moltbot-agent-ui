@@ -24,7 +24,7 @@ test("persists_gateway_fields_to_studio_settings", async ({ page }) => {
   await page.getByLabel(/Upstream (gateway )?URL/i).fill("ws://gateway.example:18789");
   await page.getByLabel("Upstream token").fill("token-123");
 
-  const request = await page.waitForRequest((req) => {
+  const requestPromise = page.waitForRequest((req) => {
     if (!req.url().includes("/api/studio") || req.method() !== "PUT") {
       return false;
     }
@@ -32,6 +32,8 @@ test("persists_gateway_fields_to_studio_settings", async ({ page }) => {
     const gateway = (payload.gateway ?? {}) as { url?: string; token?: string };
     return gateway.url === "ws://gateway.example:18789" && gateway.token === "token-123";
   });
+  await page.getByRole("button", { name: "Save settings" }).click();
+  const request = await requestPromise;
   const payload = JSON.parse(request.postData() ?? "{}") as Record<string, unknown>;
   const gateway = (payload.gateway ?? {}) as { url?: string; token?: string };
   expect(gateway.url).toBe("ws://gateway.example:18789");

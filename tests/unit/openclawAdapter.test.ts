@@ -101,6 +101,152 @@ describe("OpenClawGatewayAdapter", () => {
     await adapter.stop();
   });
 
+  it("can stop a connection attempt without wedging the next start", async () => {
+    class ManualConnectSocket extends EventEmitter {
+      readyState: number;
+
+      constructor(readyState: number) {
+        super();
+        this.readyState = readyState;
+      }
+
+      close() {
+        if (this.readyState === WebSocket.CLOSED) return;
+        this.readyState = WebSocket.CLOSED;
+        this.emit("close");
+      }
+
+      terminate() {
+        this.close();
+      }
+
+      send(raw: string, callback?: (err?: Error) => void) {
+        const parsed = JSON.parse(raw) as { id?: string; method?: string };
+        callback?.();
+        if (parsed.method !== "connect" || !parsed.id) {
+          return;
+        }
+        queueMicrotask(() => {
+          this.emit(
+            "message",
+            JSON.stringify({
+              type: "res",
+              id: parsed.id,
+              ok: true,
+              payload: { type: "hello-ok", protocol: 3 },
+            })
+          );
+        });
+      }
+    }
+
+    const sockets: ManualConnectSocket[] = [];
+    const createWebSocket = vi.fn(() => {
+      const socket = new ManualConnectSocket(
+        sockets.length === 0 ? WebSocket.CONNECTING : WebSocket.OPEN
+      );
+      sockets.push(socket);
+      if (sockets.length > 1) {
+        queueMicrotask(() => {
+          socket.emit(
+            "message",
+            JSON.stringify({ type: "event", event: "connect.challenge", payload: {} })
+          );
+        });
+      }
+      return socket as unknown as WebSocket;
+    });
+
+    const adapter = new OpenClawGatewayAdapter({
+      loadSettings: () => ({ url: "ws://127.0.0.1:9", token: "tkn" }),
+      createWebSocket,
+    });
+
+    const firstStart = adapter.start().then(
+      () => null,
+      (error: unknown) => error
+    );
+    await Promise.resolve();
+    expect(createWebSocket).toHaveBeenCalledTimes(1);
+
+    await adapter.stop();
+    const firstError = await firstStart;
+    expect(firstError).toBeInstanceOf(Error);
+    expect((firstError as Error).message).toBe("Control-plane adapter stopped.");
+    expect(adapter.getStatus()).toBe("stopped");
+
+    await adapter.start();
+    expect(createWebSocket).toHaveBeenCalledTimes(2);
+    expect(adapter.getStatus()).toBe("connected");
+
+    await adapter.stop();
+  });
+
+  it("forces an open socket closed when graceful stop does not finish", async () => {
+    vi.useFakeTimers();
+
+    class HangingCloseSocket extends EventEmitter {
+      readyState: number = WebSocket.OPEN;
+      terminated = false;
+
+      close() {
+        this.readyState = WebSocket.CLOSING;
+      }
+
+      terminate() {
+        this.terminated = true;
+        this.readyState = WebSocket.CLOSED;
+      }
+
+      send(raw: string, callback?: (err?: Error) => void) {
+        const parsed = JSON.parse(raw) as { id?: string; method?: string };
+        callback?.();
+        if (parsed.method !== "connect" || !parsed.id) {
+          return;
+        }
+        queueMicrotask(() => {
+          this.emit(
+            "message",
+            JSON.stringify({
+              type: "res",
+              id: parsed.id,
+              ok: true,
+              payload: { type: "hello-ok", protocol: 3 },
+            })
+          );
+        });
+      }
+    }
+
+    const socket = new HangingCloseSocket();
+    const adapter = new OpenClawGatewayAdapter({
+      loadSettings: () => ({ url: "ws://127.0.0.1:9", token: "tkn" }),
+      createWebSocket: () => socket as unknown as WebSocket,
+    });
+
+    queueMicrotask(() => {
+      socket.emit("message", JSON.stringify({ type: "event", event: "connect.challenge", payload: {} }));
+    });
+
+    await adapter.start();
+
+    let stopped = false;
+    const stopPromise = adapter.stop().then(() => {
+      stopped = true;
+    });
+    await Promise.resolve();
+
+    expect(stopped).toBe(false);
+    expect(socket.terminated).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await stopPromise;
+
+    expect(stopped).toBe(true);
+    expect(socket.terminated).toBe(true);
+    expect(adapter.getStatus()).toBe("stopped");
+  });
+
   it("rejects in-flight requests immediately when the socket closes", async () => {
     upstream = new WebSocketServer({ port: 0 });
     const address = upstream.address();
@@ -163,6 +309,61 @@ describe("OpenClawGatewayAdapter", () => {
     expect(observedConnectClientPlatform).toBe("node");
     expect(observedConnectCaps).toEqual(expect.arrayContaining(["tool-events"]));
     expect(observedOriginHeader).toBeUndefined();
+
+    await adapter.stop();
+  });
+
+  it("cleans up request state when gateway send throws synchronously", async () => {
+    class ThrowingRequestSocket extends EventEmitter {
+      readyState: number = WebSocket.OPEN;
+
+      close() {
+        if (this.readyState === WebSocket.CLOSED) return;
+        this.readyState = WebSocket.CLOSED;
+        this.emit("close");
+      }
+
+      terminate() {
+        this.close();
+      }
+
+      send(raw: string, callback?: (err?: Error) => void) {
+        const parsed = JSON.parse(raw) as { id?: string; method?: string };
+        if (parsed.method === "status") {
+          throw new Error("socket send failed");
+        }
+        callback?.();
+        if (parsed.method !== "connect" || !parsed.id) {
+          return;
+        }
+        queueMicrotask(() => {
+          this.emit(
+            "message",
+            JSON.stringify({
+              type: "res",
+              id: parsed.id,
+              ok: true,
+              payload: { type: "hello-ok", protocol: 3 },
+            })
+          );
+        });
+      }
+    }
+
+    const socket = new ThrowingRequestSocket();
+    const adapter = new OpenClawGatewayAdapter({
+      loadSettings: () => ({ url: "ws://127.0.0.1:9", token: "tkn" }),
+      createWebSocket: () => socket as unknown as WebSocket,
+    });
+
+    queueMicrotask(() => {
+      socket.emit("message", JSON.stringify({ type: "event", event: "connect.challenge", payload: {} }));
+    });
+
+    await adapter.start();
+    await expect(adapter.request("status", {})).rejects.toThrow(
+      "Failed to send gateway request for method: status"
+    );
 
     await adapter.stop();
   });
@@ -269,6 +470,94 @@ describe("OpenClawGatewayAdapter", () => {
     expect(createWebSocket).toHaveBeenCalledTimes(1);
 
     await adapter.stop();
+  });
+
+  it("ignores late close events from a timed-out stale socket after reconnect succeeds", async () => {
+    vi.useFakeTimers();
+
+    class ManualReconnectSocket extends EventEmitter {
+      readyState: number = WebSocket.OPEN;
+
+      close() {
+        if (this.readyState === WebSocket.CLOSED) return;
+        this.readyState = WebSocket.CLOSING;
+      }
+
+      terminate() {
+        if (this.readyState === WebSocket.CLOSED) return;
+        this.readyState = WebSocket.CLOSED;
+        this.emit("close");
+      }
+
+      send(raw: string, callback?: (err?: Error) => void) {
+        const parsed = JSON.parse(raw) as { id?: string; method?: string };
+        callback?.();
+        if (parsed.method !== "connect" || !parsed.id) {
+          return;
+        }
+        queueMicrotask(() => {
+          this.emit(
+            "message",
+            JSON.stringify({
+              type: "res",
+              id: parsed.id,
+              ok: true,
+              payload: { type: "hello-ok", protocol: 3 },
+            })
+          );
+        });
+      }
+    }
+
+    const sockets: ManualReconnectSocket[] = [];
+    const createWebSocket = vi.fn(() => {
+      const socket = new ManualReconnectSocket();
+      sockets.push(socket);
+      if (sockets.length > 1) {
+        queueMicrotask(() => {
+          socket.emit(
+            "message",
+            JSON.stringify({ type: "event", event: "connect.challenge", payload: {} })
+          );
+        });
+      }
+      return socket as unknown as WebSocket;
+    });
+
+    const adapter = new OpenClawGatewayAdapter({
+      loadSettings: () => ({ url: "ws://127.0.0.1:9", token: "tkn" }),
+      createWebSocket,
+    });
+
+    const firstStart = adapter.start().then(
+      () => null,
+      (error: unknown) => error
+    );
+
+    await vi.advanceTimersByTimeAsync(8_000);
+    const firstError = await firstStart;
+    expect(firstError).toBeInstanceOf(Error);
+    expect((firstError as Error).message).toBe(
+      "Control-plane connect timed out waiting for connect response."
+    );
+    expect(adapter.getStatus()).toBe("error");
+    expect(createWebSocket).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(createWebSocket).toHaveBeenCalledTimes(2);
+    expect(adapter.getStatus()).toBe("connected");
+
+    sockets[0].emit("close");
+    expect(adapter.getStatus()).toBe("connected");
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(createWebSocket).toHaveBeenCalledTimes(2);
+
+    const stopPromise = adapter.stop();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await stopPromise;
   });
 
   it("emits gateway events with unique connection epochs across reconnect cycles", async () => {

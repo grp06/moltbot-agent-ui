@@ -9,12 +9,7 @@ import {
 
 describe("agentReconcileOperation", () => {
   it("reconciles terminal runs and requests history refresh", async () => {
-    const call = vi.fn(async (method: string) => {
-      if (method === "agent.wait") {
-        return { status: "ok" };
-      }
-      throw new Error(`unexpected method ${method}`);
-    });
+    const waitForAgentRun = vi.fn(async () => ({ status: "ok" }));
 
     const agent = {
       agentId: "a1",
@@ -24,7 +19,7 @@ describe("agentReconcileOperation", () => {
     } as unknown as AgentState;
 
     const commands = await runAgentReconcileOperation({
-      client: { call },
+      waitForAgentRun,
       agents: [agent],
       getLatestAgent: () => agent,
       claimRunId: () => true,
@@ -32,7 +27,7 @@ describe("agentReconcileOperation", () => {
       isDisconnectLikeError: () => false,
     });
 
-    expect(call).toHaveBeenCalledWith("agent.wait", { runId: "run-1", timeoutMs: 1 });
+    expect(waitForAgentRun).toHaveBeenCalledWith({ runId: "run-1", timeoutMs: 1 });
 
     expect(commands).toEqual(
       expect.arrayContaining([
@@ -48,7 +43,7 @@ describe("agentReconcileOperation", () => {
   });
 
   it("skips when agent is not eligible", async () => {
-    const call = vi.fn();
+    const waitForAgentRun = vi.fn();
     const agent = {
       agentId: "a1",
       status: "idle",
@@ -57,7 +52,7 @@ describe("agentReconcileOperation", () => {
     } as unknown as AgentState;
 
     const commands = await runAgentReconcileOperation({
-      client: { call },
+      waitForAgentRun,
       agents: [agent],
       getLatestAgent: () => agent,
       claimRunId: () => true,
@@ -65,12 +60,12 @@ describe("agentReconcileOperation", () => {
       isDisconnectLikeError: () => false,
     });
 
-    expect(call).not.toHaveBeenCalled();
+    expect(waitForAgentRun).not.toHaveBeenCalled();
     expect(commands).toEqual([]);
   });
 
   it("reconciles shared run only once and triggers one history refresh", async () => {
-    const call = vi.fn(async () => ({ status: "ok" }));
+    const waitForAgentRun = vi.fn(async () => ({ status: "ok" }));
     const agentOne = {
       agentId: "a1",
       status: "running",
@@ -86,7 +81,7 @@ describe("agentReconcileOperation", () => {
 
     let claimed = false;
     const commands = await runAgentReconcileOperation({
-      client: { call },
+      waitForAgentRun,
       agents: [agentOne, agentTwo],
       getLatestAgent: (agentId) => (agentId === "a1" ? agentOne : agentTwo),
       claimRunId: () => {
@@ -99,7 +94,7 @@ describe("agentReconcileOperation", () => {
     });
 
     const historyRefreshes = commands.filter((entry) => entry.kind === "requestHistoryRefresh");
-    expect(call).toHaveBeenCalledTimes(1);
+    expect(waitForAgentRun).toHaveBeenCalledTimes(1);
     expect(historyRefreshes).toEqual([{ kind: "requestHistoryRefresh", agentId: "a1" }]);
 
     const dispatch = vi.fn();

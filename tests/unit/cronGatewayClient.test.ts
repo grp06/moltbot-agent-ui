@@ -16,11 +16,13 @@ const createListedJob = (params: {
   id: string;
   name: string;
   agentId?: string;
+  sessionKey?: string;
   updatedAtMs?: number;
 }): CronJobSummary => ({
   id: params.id,
   name: params.name,
   agentId: params.agentId,
+  sessionKey: params.sessionKey,
   enabled: true,
   updatedAtMs: params.updatedAtMs ?? 1_700_000_000_000,
   schedule: { kind: "every", everyMs: 60_000 },
@@ -159,6 +161,117 @@ describe("cron gateway client", () => {
     ]);
   });
 
+  it("removes_case_normalized_agent_jobs_with_backup", async () => {
+    const client = {
+      call: vi.fn(async (method: string, payload: { id?: string }) => {
+        if (method === "cron.list") {
+          return {
+            jobs: [
+              createListedJob({ id: "job-1", name: "Job 1", agentId: "Agent-1" }),
+              createListedJob({ id: "job-2", name: "Job 2", agentId: "agent-2" }),
+            ],
+          };
+        }
+        if (method === "cron.remove") {
+          return { ok: true, removed: payload.id === "job-1" };
+        }
+        throw new Error(`Unexpected method: ${method}`);
+      }),
+    } as unknown as GatewayClient;
+
+    await expect(removeCronJobsForAgentWithBackup(client, "agent-1")).resolves.toEqual([
+      expect.objectContaining({
+        name: "Job 1",
+        agentId: "agent-1",
+      }),
+    ]);
+    expect(client.call).toHaveBeenCalledWith("cron.remove", { id: "job-1" });
+    expect(client.call).not.toHaveBeenCalledWith("cron.remove", { id: "job-2" });
+  });
+
+  it("validates_all_restore_payloads_before_deleting_backup_jobs", async () => {
+    const call = vi.fn(async (method: string) => {
+      if (method === "cron.list") {
+        return {
+          jobs: [
+            createListedJob({ id: "job-1", name: "Job 1", agentId: "agent-1" }),
+            createListedJob({ id: "job-2", name: "   ", agentId: "agent-1" }),
+          ],
+        };
+      }
+      if (method === "cron.remove") {
+        return { ok: true, removed: true };
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    const client = { call } as unknown as GatewayClient;
+
+    await expect(removeCronJobsForAgentWithBackup(client, "agent-1")).rejects.toThrow(
+      "Cron job job-2 is missing name."
+    );
+
+    expect(call.mock.calls.map(([method]) => method)).toEqual(["cron.list"]);
+  });
+
+  it("validates_backup_session_keys_before_deleting_jobs", async () => {
+    const call = vi.fn(async (method: string) => {
+      if (method === "cron.list") {
+        return {
+          jobs: [
+            createListedJob({
+              id: "job-1",
+              name: "Job 1",
+              agentId: "agent-1",
+              sessionKey: "agent:agent-2:main",
+            }),
+          ],
+        };
+      }
+      if (method === "cron.remove") {
+        return { ok: true, removed: true };
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    const client = { call } as unknown as GatewayClient;
+
+    await expect(removeCronJobsForAgentWithBackup(client, "agent-1")).rejects.toThrow(
+      "Cron job job-1 sessionKey does not match agentId."
+    );
+
+    expect(call.mock.calls.map(([method]) => method)).toEqual(["cron.list"]);
+  });
+
+  it("preserves_shorthand_backup_session_keys_for_agent_jobs", async () => {
+    const client = {
+      call: vi.fn(async (method: string, payload: { id?: string }) => {
+        if (method === "cron.list") {
+          return {
+            jobs: [
+              createListedJob({
+                id: "job-1",
+                name: "Job 1",
+                agentId: "agent-1",
+                sessionKey: "project-alpha-monitor",
+              }),
+            ],
+          };
+        }
+        if (method === "cron.remove") {
+          return { ok: true, removed: payload.id === "job-1" };
+        }
+        throw new Error(`Unexpected method: ${method}`);
+      }),
+    } as unknown as GatewayClient;
+
+    await expect(removeCronJobsForAgentWithBackup(client, "agent-1")).resolves.toEqual([
+      expect.objectContaining({
+        name: "Job 1",
+        agentId: "agent-1",
+        sessionKey: "project-alpha-monitor",
+      }),
+    ]);
+  });
+
   it("restores_removed_jobs_when_backup_remove_fails_midway", async () => {
     const client = {
       call: vi.fn(async (method: string, payload: { id?: string; name?: string }) => {
@@ -293,6 +406,73 @@ describe("cron gateway client", () => {
     await createCronJob(client, input);
 
     expect(client.call).toHaveBeenCalledWith("cron.add", input);
+  });
+
+  it("trims_owned_session_key_when_creating_job", async () => {
+    const client = {
+      call: vi.fn(async () => ({ id: "job-1", name: "Morning brief" })),
+    } as unknown as GatewayClient;
+
+    const input = {
+      name: "Morning brief",
+      agentId: "agent-1",
+      sessionKey: " agent:agent-1:main ",
+      enabled: true,
+      schedule: { kind: "cron" as const, expr: "0 7 * * *", tz: "America/Chicago" },
+      sessionTarget: "isolated" as const,
+      wakeMode: "now" as const,
+      payload: { kind: "agentTurn" as const, message: "Summarize overnight updates." },
+    };
+
+    await createCronJob(client, input);
+
+    expect(client.call).toHaveBeenCalledWith("cron.add", {
+      ...input,
+      sessionKey: "agent:agent-1:main",
+    });
+  });
+
+  it("allows_shorthand_session_key_when_creating_job", async () => {
+    const client = {
+      call: vi.fn(async () => ({ id: "job-1", name: "Morning brief" })),
+    } as unknown as GatewayClient;
+
+    const input = {
+      name: "Morning brief",
+      agentId: "agent-1",
+      sessionKey: " project-alpha-monitor ",
+      enabled: true,
+      schedule: { kind: "cron" as const, expr: "0 7 * * *", tz: "America/Chicago" },
+      sessionTarget: "isolated" as const,
+      wakeMode: "now" as const,
+      payload: { kind: "agentTurn" as const, message: "Summarize overnight updates." },
+    };
+
+    await createCronJob(client, input);
+
+    expect(client.call).toHaveBeenCalledWith("cron.add", {
+      ...input,
+      sessionKey: "project-alpha-monitor",
+    });
+  });
+
+  it("rejects_foreign_session_key_when_creating_job", async () => {
+    const client = {
+      call: vi.fn(async () => ({ id: "job-1" })),
+    } as unknown as GatewayClient;
+
+    await expect(
+      createCronJob(client, {
+        name: "Morning brief",
+        agentId: "agent-1",
+        sessionKey: "agent:agent-2:main",
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "Run checks." },
+      })
+    ).rejects.toThrow("sessionKey does not match agentId.");
+    expect(client.call).not.toHaveBeenCalled();
   });
 
   it("throws_when_create_payload_missing_required_name", async () => {

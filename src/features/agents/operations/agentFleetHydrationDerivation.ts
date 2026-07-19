@@ -1,6 +1,7 @@
 import { buildAgentMainSessionKey } from "@/lib/gateway/session-keys";
 import { resolveConfiguredModelKey, type GatewayModelPolicySnapshot } from "@/lib/gateway/models";
 import { resolveAgentAvatarSeed, type StudioSettings } from "@/lib/studio/settings";
+import { resolveSafeAgentId } from "@/lib/agents/agentIds";
 import {
   buildSummarySnapshotPatches,
   type SummaryPreviewSnapshot,
@@ -10,7 +11,7 @@ import {
 } from "@/features/agents/state/runtimeEventBridge";
 import type { AgentStoreSeed } from "@/features/agents/state/store";
 
-type AgentsListResult = {
+export type AgentsListResult = {
   defaultId: string;
   mainKey: string;
   scope?: string;
@@ -59,6 +60,26 @@ type SandboxMode = "off" | "non-main" | "all";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === "object" && !Array.isArray(value));
+
+export const normalizeAgentsListResultForHydration = (
+  agentsResult: AgentsListResult
+): AgentsListResult => {
+  const seenAgentIds = new Set<string>();
+  const agents: AgentsListResult["agents"] = [];
+  for (const agent of agentsResult.agents) {
+    const agentId = resolveSafeAgentId(agent.id);
+    if (!agentId) continue;
+    const dedupeKey = agentId.toLowerCase();
+    if (seenAgentIds.has(dedupeKey)) continue;
+    seenAgentIds.add(dedupeKey);
+    agents.push(agentId === agent.id ? agent : { ...agent, id: agentId });
+  }
+  return {
+    ...agentsResult,
+    defaultId: resolveSafeAgentId(agentsResult.defaultId) ?? "",
+    agents,
+  };
+};
 
 const resolveAgentSandboxMode = (
   agentId: string,
@@ -182,9 +203,12 @@ type DerivedHydrateAgentFleetResult = {
 export const deriveHydrateAgentFleetResult = (
   input: DeriveFleetHydrationInput
 ): DerivedHydrateAgentFleetResult => {
+  const agentsResult = normalizeAgentsListResultForHydration(input.agentsResult);
   const execPolicyByAgentId = new Map<string, ExecPolicyEntry>();
   const execAgents = input.execApprovalsSnapshot?.file?.agents ?? {};
-  for (const [agentId, entry] of Object.entries(execAgents)) {
+  for (const [agentIdRaw, entry] of Object.entries(execAgents)) {
+    const agentId = resolveSafeAgentId(agentIdRaw);
+    if (!agentId) continue;
     const normalizedSecurity = normalizeExecSecurity(entry?.security);
     const normalizedAsk = normalizeExecAsk(entry?.ask);
     if (!normalizedSecurity && !normalizedAsk) continue;
@@ -194,11 +218,11 @@ export const deriveHydrateAgentFleetResult = (
     });
   }
 
-  const mainKey = input.agentsResult.mainKey?.trim() || "main";
+  const mainKey = agentsResult.mainKey?.trim() || "main";
   const gatewayKey = input.gatewayUrl.trim();
 
   const needsSessionSettingsSync = new Set<string>();
-  const seeds: AgentStoreSeed[] = input.agentsResult.agents.map((agent) => {
+  const seeds: AgentStoreSeed[] = agentsResult.agents.map((agent) => {
     const persistedSeed =
       input.settings && gatewayKey ? resolveAgentAvatarSeed(input.settings, gatewayKey, agent.id) : null;
     const avatarSeed = persistedSeed ?? agent.id;

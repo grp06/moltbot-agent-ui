@@ -19,6 +19,7 @@ import {
 import { loadStudioSettings } from "@/lib/studio/settings-store";
 
 const CONNECT_TIMEOUT_MS = 8_000;
+const STOP_CLOSE_TIMEOUT_MS = 1_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 const INITIAL_RECONNECT_DELAY_MS = 1_000;
 const MAX_RECONNECT_DELAY_MS = 15_000;
@@ -236,6 +237,7 @@ export class OpenClawGatewayAdapter {
 
   async stop(): Promise<void> {
     this.stopping = true;
+    const inFlightStart = this.startPromise;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -249,13 +251,30 @@ export class OpenClawGatewayAdapter {
     this.ws = null;
     this.connectRequestId = null;
     this.connectionEpoch = null;
-    if (ws && ws.readyState === WebSocket.OPEN) {
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CLOSING)) {
       await new Promise<void>((resolve) => {
-        ws.once("close", () => resolve());
-        ws.close(1000, "controlplane stopping");
+        let done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          ws.off("close", finish);
+          resolve();
+        };
+        const timer = setTimeout(() => {
+          ws.terminate();
+          finish();
+        }, STOP_CLOSE_TIMEOUT_MS);
+        ws.once("close", finish);
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.close(1000, "controlplane stopping");
+        }
       });
     } else {
       ws?.terminate();
+    }
+    if (inFlightStart) {
+      await inFlightStart.catch(() => {});
     }
     if (!this.preserveConnectProfileOnStop) {
       this.connectProfileId = "backend-local";
@@ -296,12 +315,19 @@ export class OpenClawGatewayAdapter {
           );
         }, timeoutMs);
         this.pending.set(id, { resolve, reject, timer });
-        ws.send(JSON.stringify(frame), (err) => {
-          if (!err) return;
+        const rejectSendFailure = () => {
           clearTimeout(timer);
           this.pending.delete(id);
           reject(new Error(`Failed to send gateway request for method: ${normalizedMethod}`));
-        });
+        };
+        try {
+          ws.send(JSON.stringify(frame), (err) => {
+            if (!err) return;
+            rejectSendFailure();
+          });
+        } catch {
+          rejectSendFailure();
+        }
       });
       return response as T;
     } catch (error) {
@@ -326,11 +352,13 @@ export class OpenClawGatewayAdapter {
       protocol: CONNECT_PROTOCOL,
       capabilities: CONNECT_CAPABILITIES,
     });
-    this.connectionEpoch = randomUUID();
+    const connectionEpoch = randomUUID();
+    this.connectionEpoch = connectionEpoch;
     const ws = this.createWebSocket(settings.url, profile.socketOptions);
     this.ws = ws;
     this.connectRequestId = null;
     this.updateStatus(this.reconnectAttempt > 0 ? "reconnecting" : "connecting", null);
+    const isActiveConnection = () => this.ws === ws && this.connectionEpoch === connectionEpoch;
 
     await new Promise<void>((resolve, reject) => {
       let settled = false;
@@ -360,6 +388,7 @@ export class OpenClawGatewayAdapter {
       }, CONNECT_TIMEOUT_MS);
 
       ws.on("message", (raw) => {
+        if (this.stopping || !isActiveConnection()) return;
         const parsed = this.parseFrame(String(raw ?? ""));
         if (!parsed) return;
         if (parsed.type === "event") {
@@ -404,8 +433,14 @@ export class OpenClawGatewayAdapter {
       });
 
       ws.on("close", () => {
-        if (this.stopping) return;
+        const activeConnection = isActiveConnection();
+        if (!activeConnection && !this.stopping) return;
         if (!settled) {
+          if (this.stopping) {
+            settle(() => reject(new Error("Control-plane adapter stopped.")));
+            return;
+          }
+          if (!activeConnection) return;
           settle(() =>
             reject(
               new ControlPlaneGatewayConnectError({
@@ -418,6 +453,8 @@ export class OpenClawGatewayAdapter {
           );
           return;
         }
+        if (this.stopping) return;
+        if (!activeConnection) return;
         this.rejectPending("Control-plane gateway connection closed.");
         this.connectionEpoch = null;
         if (!allowReconnectAfterClose) {
@@ -429,6 +466,7 @@ export class OpenClawGatewayAdapter {
 
       ws.on("error", (error) => {
         if (this.stopping) return;
+        if (!isActiveConnection()) return;
         if (!settled) {
           settle(() =>
             reject(
@@ -444,6 +482,9 @@ export class OpenClawGatewayAdapter {
       });
     }).catch((err) => {
       this.connectionEpoch = null;
+      if (this.stopping) {
+        throw err;
+      }
       this.updateStatus("error", err instanceof Error ? err.message : "connect_error");
       if (!isConnectRejectionError(err)) {
         this.scheduleReconnect();

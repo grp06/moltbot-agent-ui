@@ -1,0 +1,15 @@
+{
+  "id": "2026-05-08-2100-media-line-parser",
+  "slug": "media-line-parser",
+  "title": "Media line parser refactor",
+  "created_at": "2026-05-09T05:00:00Z",
+  "updated_at": "2026-05-09T05:24:00Z",
+  "stage": "implementation",
+  "state": "completed",
+  "artifacts": {
+    "candidates": "candidates.md",
+    "decision": "decision.md",
+    "execplan": "execplan.md",
+    "review": null
+  }
+}

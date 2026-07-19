@@ -171,7 +171,10 @@ export const planRuntimeChatEvent = (
   const shouldUpdateLastResult =
     payload.state === "final" && !isToolRole && typeof finalAssistantText === "string";
   const shouldQueueLatestUpdate =
-    payload.state === "final" && Boolean(agent?.lastUserMessage && !agent.latestOverride);
+    payload.state === "final" &&
+    role === "assistant" &&
+    !isToolRole &&
+    Boolean(agent?.lastUserMessage && !agent.latestOverride);
   const terminalSeq = payload.state === "final" ? resolveTerminalSeq(payload) : null;
   const chatTerminalDecision =
     payload.state === "final"

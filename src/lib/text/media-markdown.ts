@@ -3,6 +3,11 @@ const MEDIA_ONLY_RE = /^\s*MEDIA:\s*$/;
 
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
 
+type ParsedMediaLine = {
+  mediaPath: string;
+  consumesNextLine: boolean;
+};
+
 const isImagePath = (value: string): boolean => {
   const trimmed = value.trim();
   if (!trimmed) return false;
@@ -15,6 +20,24 @@ const isImagePath = (value: string): boolean => {
 
 const toMediaUrl = (path: string): string => {
   return `/api/runtime/media?path=${encodeURIComponent(path)}`;
+};
+
+const parseMediaLine = (lines: string[], idx: number): ParsedMediaLine | null => {
+  const line = lines[idx] ?? "";
+  const match = line.match(MEDIA_LINE_RE);
+  if (match) {
+    const mediaPath = (match[1] ?? "").trim();
+    if (isImagePath(mediaPath)) {
+      return { mediaPath, consumesNextLine: false };
+    }
+    return null;
+  }
+
+  if (!MEDIA_ONLY_RE.test(line)) return null;
+
+  const next = (lines[idx + 1] ?? "").trim();
+  if (!isImagePath(next)) return null;
+  return { mediaPath: next, consumesNextLine: true };
 };
 
 /**
@@ -44,36 +67,20 @@ export const rewriteMediaLinesToMarkdown = (text: string): string => {
       continue;
     }
 
-    let mediaPath: string | null = null;
-    let consumesNextLine = false;
-    const match = line.match(MEDIA_LINE_RE);
-    if (match) {
-      mediaPath = (match[1] ?? "").trim() || null;
-    } else if (MEDIA_ONLY_RE.test(line)) {
-      const next = (lines[idx + 1] ?? "").trim();
-      if (isImagePath(next)) {
-        mediaPath = next;
-        consumesNextLine = true;
-      }
-    }
-    if (!mediaPath) {
+    const parsed = parseMediaLine(lines, idx);
+    if (!parsed) {
       out.push(line);
       continue;
     }
 
-    const url = toMediaUrl(mediaPath);
+    const url = toMediaUrl(parsed.mediaPath);
 
-    if (isImagePath(mediaPath)) {
-      out.push(`![](${url})`);
-      out.push("");
-      out.push(`MEDIA: ${mediaPath}`);
-      if (consumesNextLine) {
-        idx += 1;
-      }
-      continue;
+    out.push(`![](${url})`);
+    out.push("");
+    out.push(`MEDIA: ${parsed.mediaPath}`);
+    if (parsed.consumesNextLine) {
+      idx += 1;
     }
-
-    out.push(line);
   }
 
   return out.join("\n");

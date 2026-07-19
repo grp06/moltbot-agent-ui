@@ -95,6 +95,95 @@ describe("runtime routes", () => {
     expect(body.freshness.source).toBe("gateway");
   });
 
+  it("agent-file route rejects unsupported file names before gateway reads", async () => {
+    const callGateway = vi.fn();
+    const runtimeMock: RuntimeMock = {
+      ensureStarted: async () => {},
+      snapshot: () => ({
+        status: "connected",
+        reason: null,
+        asOf: "2026-02-28T02:40:00.000Z",
+        outboxHead: 12,
+      }),
+      eventsAfter: () => [],
+      eventsBefore: () => [],
+      eventsBeforeForAgent: () => [],
+      backfillAgentHistoryIndex: () => ({ scannedRows: 0, updatedRows: 0, exhausted: true }),
+      subscribe: () => () => {},
+      callGateway: callGateway as RuntimeMock["callGateway"],
+    };
+    const mod = await loadRouteModule<{ GET: (request: Request) => Promise<Response> }>(
+      "@/app/api/runtime/agent-file/route",
+      runtimeMock
+    );
+
+    const response = await mod.GET(
+      new Request("http://localhost/api/runtime/agent-file?agentId=agent-1&name=../profile.json")
+    );
+    const body = await response.json() as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(body.error).toContain("Unsupported agent file name");
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("per-agent runtime routes reject malformed agent ids before gateway reads", async () => {
+    const callGateway = vi.fn(async () => ({ previews: [], messages: [] }));
+    const ensureStarted = vi.fn(async () => {});
+    const runtimeMock: RuntimeMock = {
+      ensureStarted,
+      snapshot: () => ({
+        status: "connected",
+        reason: null,
+        asOf: "2026-02-28T02:40:00.000Z",
+        outboxHead: 12,
+      }),
+      eventsAfter: () => [],
+      eventsBefore: () => [],
+      eventsBeforeForAgent: () => [],
+      backfillAgentHistoryIndex: () => ({ scannedRows: 0, updatedRows: 0, exhausted: true }),
+      subscribe: () => () => {},
+      callGateway: callGateway as RuntimeMock["callGateway"],
+    };
+    const agentFileRoute = await loadRouteModule<{ GET: (request: Request) => Promise<Response> }>(
+      "@/app/api/runtime/agent-file/route",
+      runtimeMock
+    );
+    const historyRoute = await loadRouteModule<{
+      GET: (
+        request: Request,
+        context: { params: Promise<{ agentId: string }> }
+      ) => Promise<Response>;
+    }>("@/app/api/runtime/agents/[agentId]/history/route", runtimeMock);
+    const previewRoute = await loadRouteModule<{
+      GET: (
+        request: Request,
+        context: { params: Promise<{ agentId: string }> }
+      ) => Promise<Response>;
+    }>("@/app/api/runtime/agents/[agentId]/preview/route", runtimeMock);
+
+    const invalidAgentId = "../agent-1";
+    const fileResponse = await agentFileRoute.GET(
+      new Request(
+        `http://localhost/api/runtime/agent-file?agentId=${encodeURIComponent(invalidAgentId)}&name=AGENTS.md`
+      )
+    );
+    const historyResponse = await historyRoute.GET(
+      new Request("http://localhost/api/runtime/agents/..%2Fagent-1/history"),
+      { params: Promise.resolve({ agentId: invalidAgentId }) }
+    );
+    const previewResponse = await previewRoute.GET(
+      new Request("http://localhost/api/runtime/agents/..%2Fagent-1/preview"),
+      { params: Promise.resolve({ agentId: invalidAgentId }) }
+    );
+
+    expect(fileResponse.status).toBe(400);
+    expect(historyResponse.status).toBe(400);
+    expect(previewResponse.status).toBe(400);
+    expect(ensureStarted).not.toHaveBeenCalled();
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
   it("summary route returns degraded projection freshness when gateway start fails", async () => {
     vi.resetModules();
     vi.doMock("@/lib/controlplane/runtime", () => ({
@@ -385,6 +474,82 @@ describe("runtime routes", () => {
     expect(body.gatewayCapped).toBe(false);
   });
 
+  it("agent history route rejects session keys for another agent", async () => {
+    const callGateway = vi.fn().mockResolvedValue({ messages: [] });
+    const runtimeMock: RuntimeMock = {
+      ensureStarted: async () => {},
+      snapshot: () => ({
+        status: "connected",
+        reason: null,
+        asOf: "2026-02-28T02:40:00.000Z",
+        outboxHead: 10,
+      }),
+      eventsAfter: () => [],
+      eventsBefore: () => [],
+      eventsBeforeForAgent: () => [],
+      backfillAgentHistoryIndex: () => ({ scannedRows: 0, updatedRows: 0, exhausted: true }),
+      subscribe: () => () => {},
+      callGateway,
+    };
+
+    const mod = await loadRouteModule<{
+      GET: (
+        request: Request,
+        context: { params: Promise<{ agentId: string }> }
+      ) => Promise<Response>;
+    }>("@/app/api/runtime/agents/[agentId]/history/route", runtimeMock);
+
+    const response = await mod.GET(
+      new Request(
+        "http://localhost/api/runtime/agents/alpha/history?sessionKey=agent:beta:main"
+      ),
+      { params: Promise.resolve({ agentId: "alpha" }) }
+    );
+    const body = await response.json() as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe("sessionKey does not match agentId.");
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("agent history route rejects malformed explicit session keys", async () => {
+    const callGateway = vi.fn().mockResolvedValue({ messages: [] });
+    const runtimeMock: RuntimeMock = {
+      ensureStarted: async () => {},
+      snapshot: () => ({
+        status: "connected",
+        reason: null,
+        asOf: "2026-02-28T02:40:00.000Z",
+        outboxHead: 10,
+      }),
+      eventsAfter: () => [],
+      eventsBefore: () => [],
+      eventsBeforeForAgent: () => [],
+      backfillAgentHistoryIndex: () => ({ scannedRows: 0, updatedRows: 0, exhausted: true }),
+      subscribe: () => () => {},
+      callGateway,
+    };
+
+    const mod = await loadRouteModule<{
+      GET: (
+        request: Request,
+        context: { params: Promise<{ agentId: string }> }
+      ) => Promise<Response>;
+    }>("@/app/api/runtime/agents/[agentId]/history/route", runtimeMock);
+
+    const response = await mod.GET(
+      new Request(
+        "http://localhost/api/runtime/agents/alpha/history?sessionKey=main"
+      ),
+      { params: Promise.resolve({ agentId: "alpha" }) }
+    );
+    const body = await response.json() as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe("sessionKey does not match agentId.");
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
   it("agent history route can return compact semantic conversation without thinking/tool payload", async () => {
     const callGateway = vi.fn().mockResolvedValue({
       messages: [
@@ -537,6 +702,161 @@ describe("runtime routes", () => {
     expect(body.gatewayCapped).toBe(false);
   });
 
+  it("agent history route reports a non-negative age for coalesced cache reads", async () => {
+    let resolveHistory!: (value: {
+      messages: Array<{ role: string; content: string; timestamp: string }>;
+    }) => void;
+    const historyPromise = new Promise<{
+      messages: Array<{ role: string; content: string; timestamp: string }>;
+    }>((resolve) => {
+      resolveHistory = resolve;
+    });
+    const callGateway = vi.fn().mockReturnValue(historyPromise);
+    let nowMs = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    const runtimeMock: RuntimeMock = {
+      ensureStarted: async () => {},
+      snapshot: () => ({
+        status: "connected",
+        reason: null,
+        asOf: "2026-02-28T02:40:00.000Z",
+        outboxHead: 32,
+      }),
+      eventsAfter: () => [],
+      eventsBefore: () => [],
+      eventsBeforeForAgent: () => [
+        {
+          id: 32,
+          event: { type: "gateway.event", event: "agent" },
+          createdAt: "2026-02-28T02:40:00.000Z",
+        },
+      ],
+      backfillAgentHistoryIndex: () => ({ scannedRows: 0, updatedRows: 0, exhausted: true }),
+      subscribe: () => () => {},
+      callGateway,
+    };
+
+    const mod = await loadRouteModule<{
+      GET: (
+        request: Request,
+        context: { params: Promise<{ agentId: string }> }
+      ) => Promise<Response>;
+    }>("@/app/api/runtime/agents/[agentId]/history/route", runtimeMock);
+
+    const requestUrl =
+      "http://localhost/api/runtime/agents/alpha/history?view=raw&limit=2&sessionKey=agent:alpha:main";
+    const firstResponsePromise = mod.GET(new Request(requestUrl), {
+      params: Promise.resolve({ agentId: "alpha" }),
+    });
+    await vi.waitFor(() => expect(callGateway).toHaveBeenCalledTimes(1));
+
+    nowMs = 1_005;
+    const secondResponsePromise = mod.GET(new Request(requestUrl), {
+      params: Promise.resolve({ agentId: "alpha" }),
+    });
+    await vi.waitFor(() => expect(callGateway).toHaveBeenCalledTimes(1));
+
+    nowMs = 1_020;
+    resolveHistory({
+      messages: [
+        { role: "user", content: "u1", timestamp: "2026-02-28T02:40:01.000Z" },
+        { role: "assistant", content: "a1", timestamp: "2026-02-28T02:40:02.000Z" },
+      ],
+    });
+    const [firstResponse, secondResponse] = await Promise.all([
+      firstResponsePromise,
+      secondResponsePromise,
+    ]);
+
+    expect(firstResponse.status).toBe(200);
+    expect(secondResponse.status).toBe(200);
+    expect(callGateway).toHaveBeenCalledTimes(1);
+
+    const firstBody = (await firstResponse.json()) as {
+      cacheStatus: string;
+      cacheAgeMs: number | null;
+    };
+    const secondBody = (await secondResponse.json()) as {
+      cacheStatus: string;
+      cacheAgeMs: number | null;
+    };
+    expect(firstBody.cacheStatus).toBe("miss");
+    expect(firstBody.cacheAgeMs).toBe(0);
+    expect(secondBody.cacheStatus).toBe("coalesced");
+    expect(secondBody.cacheAgeMs).toBe(0);
+  });
+
+  it("agent history route does not reuse cache entries across gateway credentials", async () => {
+    const gatewayUrl = "ws://gateway.example/ws";
+    let gatewayToken = "token-one";
+    vi.doMock("@/lib/studio/settings-store", () => ({
+      loadStudioSettings: () => ({
+        version: 1,
+        gateway: { url: gatewayUrl, token: gatewayToken },
+        localGatewayDefaults: { url: "", token: "" },
+        focused: {},
+        avatars: {},
+      }),
+    }));
+    const callGateway = vi
+      .fn()
+      .mockResolvedValueOnce({
+        messages: [{ role: "assistant", content: "from-one" }],
+      })
+      .mockResolvedValueOnce({
+        messages: [{ role: "assistant", content: "from-two" }],
+      });
+    const runtimeMock: RuntimeMock = {
+      ensureStarted: async () => {},
+      snapshot: () => ({
+        status: "connected",
+        reason: null,
+        asOf: "2026-02-28T02:40:00.000Z",
+        outboxHead: 24,
+      }),
+      eventsAfter: () => [],
+      eventsBefore: () => [],
+      eventsBeforeForAgent: () => [
+        {
+          id: 24,
+          event: { type: "gateway.event", event: "agent" },
+          createdAt: "2026-02-28T02:40:00.000Z",
+        },
+      ],
+      backfillAgentHistoryIndex: () => ({ scannedRows: 0, updatedRows: 0, exhausted: true }),
+      subscribe: () => () => {},
+      callGateway,
+    };
+
+    try {
+      const mod = await loadRouteModule<{
+        GET: (
+          request: Request,
+          context: { params: Promise<{ agentId: string }> }
+        ) => Promise<Response>;
+      }>("@/app/api/runtime/agents/[agentId]/history/route", runtimeMock);
+
+      const request = new Request(
+        "http://localhost/api/runtime/agents/alpha/history?view=raw&limit=2&sessionKey=agent:alpha:main"
+      );
+      const firstResponse = await mod.GET(request, {
+        params: Promise.resolve({ agentId: "alpha" }),
+      });
+      gatewayToken = "token-two";
+      const secondResponse = await mod.GET(request, {
+        params: Promise.resolve({ agentId: "alpha" }),
+      });
+
+      expect(firstResponse.status).toBe(200);
+      expect(secondResponse.status).toBe(200);
+      expect(callGateway).toHaveBeenCalledTimes(2);
+      const body = (await secondResponse.json()) as { messages: Array<{ content: string }> };
+      expect(body.messages[0]?.content).toBe("from-two");
+    } finally {
+      vi.doUnmock("@/lib/studio/settings-store");
+    }
+  });
+
   it("agent history route refreshes payload when agent revision advances", async () => {
     const callGateway = vi
       .fn()
@@ -676,6 +996,43 @@ describe("runtime routes", () => {
     expect(secondChunk).toContain("event: runtime.status");
 
     await reader.cancel();
+    expect(subscriber).toBeNull();
+  });
+
+  it("stream route does not subscribe when the request is already aborted", async () => {
+    const subscribe = vi.fn(() => () => {});
+    const runtimeMock: RuntimeMock = {
+      ensureStarted: async () => {},
+      snapshot: () => ({
+        status: "connected",
+        reason: null,
+        asOf: "2026-02-28T02:40:00.000Z",
+        outboxHead: 4,
+      }),
+      eventsAfter: () => [],
+      eventsBefore: () => [],
+      eventsBeforeForAgent: () => [],
+      backfillAgentHistoryIndex: () => ({ scannedRows: 0, updatedRows: 0, exhausted: true }),
+      subscribe,
+    };
+
+    const mod = await loadRouteModule<{ GET: (request: Request) => Promise<Response> }>(
+      "@/app/api/runtime/stream/route",
+      runtimeMock
+    );
+    const abortController = new AbortController();
+    abortController.abort();
+    const response = await mod.GET(
+      new Request("http://localhost/api/runtime/stream", {
+        signal: abortController.signal,
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(subscribe).not.toHaveBeenCalled();
+    const reader = response.body!.getReader();
+    const result = await reader.read();
+    expect(result.done).toBe(true);
   });
 
   it("stream route replays reconnect backlog across multiple pages when missed rows exceed replay limit", async () => {
@@ -1277,6 +1634,19 @@ describe("runtime routes", () => {
         }),
         eventsAfter: () => [
           {
+            id: 2,
+            event: {
+              type: "gateway.event",
+              event: "runtime.delta",
+              seq: 11,
+              payload: {
+                sessionKey: "agent:../alpha:main",
+              },
+              asOf: "2026-02-28T02:40:02.000Z",
+            },
+            createdAt: "2026-02-28T02:40:02.000Z",
+          },
+          {
             id: 3,
             event: {
               type: "gateway.event",
@@ -1498,6 +1868,126 @@ describe("runtime routes", () => {
       { role: "assistant", text: "hi", timestamp: 123 },
       { role: "user", text: "hello there", timestamp: "2026-02-28T02:40:01.000Z" },
     ]);
+  });
+
+  it("agent preview route rejects session keys for another agent", async () => {
+    const callGateway = vi.fn().mockResolvedValue({ previews: [] });
+    const runtimeMock: RuntimeMock = {
+      ensureStarted: async () => {},
+      snapshot: () => ({
+        status: "connected",
+        reason: null,
+        asOf: "2026-02-28T02:40:00.000Z",
+        outboxHead: 10,
+      }),
+      eventsAfter: () => [],
+      eventsBefore: () => [],
+      eventsBeforeForAgent: () => [],
+      backfillAgentHistoryIndex: () => ({ scannedRows: 0, updatedRows: 0, exhausted: true }),
+      subscribe: () => () => {},
+      callGateway,
+    };
+
+    const mod = await loadRouteModule<{
+      GET: (
+        request: Request,
+        context: { params: Promise<{ agentId: string }> }
+      ) => Promise<Response>;
+    }>("@/app/api/runtime/agents/[agentId]/preview/route", runtimeMock);
+
+    const response = await mod.GET(
+      new Request(
+        "http://localhost/api/runtime/agents/alpha/preview?sessionKey=agent:beta:main"
+      ),
+      { params: Promise.resolve({ agentId: "alpha" }) }
+    );
+    const body = await response.json() as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe("sessionKey does not match agentId.");
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("agent preview route rejects malformed explicit session keys", async () => {
+    const callGateway = vi.fn().mockResolvedValue({ previews: [] });
+    const runtimeMock: RuntimeMock = {
+      ensureStarted: async () => {},
+      snapshot: () => ({
+        status: "connected",
+        reason: null,
+        asOf: "2026-02-28T02:40:00.000Z",
+        outboxHead: 10,
+      }),
+      eventsAfter: () => [],
+      eventsBefore: () => [],
+      eventsBeforeForAgent: () => [],
+      backfillAgentHistoryIndex: () => ({ scannedRows: 0, updatedRows: 0, exhausted: true }),
+      subscribe: () => () => {},
+      callGateway,
+    };
+
+    const mod = await loadRouteModule<{
+      GET: (
+        request: Request,
+        context: { params: Promise<{ agentId: string }> }
+      ) => Promise<Response>;
+    }>("@/app/api/runtime/agents/[agentId]/preview/route", runtimeMock);
+
+    const response = await mod.GET(
+      new Request(
+        "http://localhost/api/runtime/agents/alpha/preview?sessionKey=main"
+      ),
+      { params: Promise.resolve({ agentId: "alpha" }) }
+    );
+    const body = await response.json() as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe("sessionKey does not match agentId.");
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("agent preview route does not fall back to a mismatched preview key", async () => {
+    const callGateway = vi.fn().mockResolvedValue({
+      previews: [
+        {
+          key: "agent:beta:main",
+          items: [{ role: "assistant", text: "beta secret" }],
+        },
+      ],
+    });
+    const runtimeMock: RuntimeMock = {
+      ensureStarted: async () => {},
+      snapshot: () => ({
+        status: "connected",
+        reason: null,
+        asOf: "2026-02-28T02:40:00.000Z",
+        outboxHead: 10,
+      }),
+      eventsAfter: () => [],
+      eventsBefore: () => [],
+      eventsBeforeForAgent: () => [],
+      backfillAgentHistoryIndex: () => ({ scannedRows: 0, updatedRows: 0, exhausted: true }),
+      subscribe: () => () => {},
+      callGateway,
+    };
+
+    const mod = await loadRouteModule<{
+      GET: (
+        request: Request,
+        context: { params: Promise<{ agentId: string }> }
+      ) => Promise<Response>;
+    }>("@/app/api/runtime/agents/[agentId]/preview/route", runtimeMock);
+
+    const response = await mod.GET(
+      new Request(
+        "http://localhost/api/runtime/agents/alpha/preview?sessionKey=agent:alpha:main"
+      ),
+      { params: Promise.resolve({ agentId: "alpha" }) }
+    );
+    const body = await response.json() as { items?: Array<{ text?: string }> };
+
+    expect(response.status).toBe(200);
+    expect(body.items).toEqual([]);
   });
 
   it("runtime fleet route returns 503 when runtime initialization fails", async () => {

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { isSafeAgentId } from "@/lib/agents/agentIds";
 import { restoreAgentStateLocally, trashAgentStateLocally } from "@/lib/agent-state/local";
 import { isLocalGatewayUrl } from "@/lib/gateway/local-gateway";
 import {
@@ -23,8 +24,6 @@ type RestoreAgentStateRequest = {
   trashDir: string;
 };
 
-const isSafeAgentId = (value: string) => /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(value);
-
 const resolveAgentStateSshTarget = (): string | null => {
   const configured = resolveConfiguredSshTarget(process.env);
   if (configured) return configured;
@@ -34,13 +33,29 @@ const resolveAgentStateSshTarget = (): string | null => {
   return resolveGatewaySshTargetFromGatewayUrl(gatewayUrl, process.env);
 };
 
-export async function POST(request: Request) {
+const parseAgentStateBody = async (
+  request: Request
+): Promise<Record<string, unknown> | NextResponse> => {
+  let body: unknown;
   try {
-    const body = (await request.json()) as unknown;
-    if (!body || typeof body !== "object") {
-      return NextResponse.json({ error: "Invalid request payload." }, { status: 400 });
-    }
-    const { agentId } = body as Partial<TrashAgentStateRequest>;
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON payload." }, { status: 400 });
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return NextResponse.json({ error: "Invalid request payload." }, { status: 400 });
+  }
+  return body as Record<string, unknown>;
+};
+
+export async function POST(request: Request) {
+  const bodyOrError = await parseAgentStateBody(request);
+  if (bodyOrError instanceof Response) {
+    return bodyOrError as NextResponse;
+  }
+
+  try {
+    const { agentId } = bodyOrError as Partial<TrashAgentStateRequest>;
     const trimmed = typeof agentId === "string" ? agentId.trim() : "";
     if (!trimmed) {
       return NextResponse.json({ error: "agentId is required." }, { status: 400 });
@@ -63,12 +78,13 @@ export async function POST(request: Request) {
 }
 
 export async function PUT(request: Request) {
+  const bodyOrError = await parseAgentStateBody(request);
+  if (bodyOrError instanceof Response) {
+    return bodyOrError as NextResponse;
+  }
+
   try {
-    const body = (await request.json()) as unknown;
-    if (!body || typeof body !== "object") {
-      return NextResponse.json({ error: "Invalid request payload." }, { status: 400 });
-    }
-    const { agentId, trashDir } = body as Partial<RestoreAgentStateRequest>;
+    const { agentId, trashDir } = bodyOrError as Partial<RestoreAgentStateRequest>;
     const trimmedAgent = typeof agentId === "string" ? agentId.trim() : "";
     const trimmedTrash = typeof trashDir === "string" ? trashDir.trim() : "";
     if (!trimmedAgent) {

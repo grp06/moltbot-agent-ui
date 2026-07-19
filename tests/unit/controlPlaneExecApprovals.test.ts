@@ -5,6 +5,44 @@ import { ControlPlaneGatewayError } from "@/lib/controlplane/openclaw-adapter";
 import type { ControlPlaneRuntime } from "@/lib/controlplane/runtime";
 
 describe("control-plane exec approvals policy upsert", () => {
+  it("rejects unsafe agent ids before reading approval policy", async () => {
+    const runtime = {
+      callGateway: vi.fn(),
+    } as unknown as ControlPlaneRuntime;
+
+    await expect(
+      upsertAgentExecApprovalsPolicyViaRuntime({
+        runtime,
+        agentId: "../agent-1",
+        role: "autonomous",
+      })
+    ).rejects.toThrow("Invalid agentId: ../agent-1");
+
+    expect(runtime.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("requires a base hash unless the exec approvals file is known missing", async () => {
+    const runtime = {
+      callGateway: vi.fn(async (method: string) => {
+        if (method === "exec.approvals.get") {
+          return {
+            path: "/tmp/approvals.json",
+            file: { version: 1, agents: {} },
+          };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+    } as unknown as ControlPlaneRuntime;
+
+    await expect(
+      upsertAgentExecApprovalsPolicyViaRuntime({
+        runtime,
+        agentId: "agent-1",
+        role: "autonomous",
+      })
+    ).rejects.toThrow("Exec approvals hash unavailable; re-run exec.approvals.get.");
+  });
+
   it("rebuilds retry payload from latest snapshot on stale base-hash conflicts", async () => {
     let getCount = 0;
     let setCount = 0;

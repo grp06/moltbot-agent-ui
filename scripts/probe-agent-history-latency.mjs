@@ -61,7 +61,7 @@ export const parseProbeArgs = (argv) => {
       continue;
     }
     const value = asTrimmed(argv[index + 1]);
-    if (!value) {
+    if (!value || value.startsWith("--")) {
       throw new Error(`Missing value for ${token}`);
     }
     if (token === "--base-url") {
@@ -189,7 +189,13 @@ export const resolveTargetFromFleet = (params) => {
 
 export const buildProbePaths = ({ agentId, sessionKey }) => {
   const normalizedAgentId = encodeURIComponent(asTrimmed(agentId));
-  void sessionKey;
+  const query = new URLSearchParams({
+    sessionKey: asTrimmed(sessionKey),
+    limit: "50",
+    view: "semantic",
+    turnLimit: "50",
+    scanLimit: "800",
+  });
   return [
     {
       name: "summary",
@@ -200,7 +206,7 @@ export const buildProbePaths = ({ agentId, sessionKey }) => {
     {
       name: "semantic-history",
       method: "GET",
-      path: `/api/runtime/agents/${normalizedAgentId}/history?limit=50&view=semantic&turnLimit=50&scanLimit=800`,
+      path: `/api/runtime/agents/${normalizedAgentId}/history?${query.toString()}`,
       sloBlocking: true,
     },
   ];
@@ -291,12 +297,34 @@ export const assessRuntimePreflight = ({ response, allowDisconnected }) => {
   }
 
   const payload = response.body;
-  const summary = payload && typeof payload === "object" ? payload.summary : null;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return {
+      pass: false,
+      connected: false,
+      status: null,
+      message: "runtime preflight failed: invalid /api/runtime/summary payload",
+    };
+  }
+  const summary = payload.summary;
+  if (!summary || typeof summary !== "object" || Array.isArray(summary)) {
+    return {
+      pass: false,
+      connected: false,
+      status: null,
+      message: "runtime preflight failed: missing summary in /api/runtime/summary payload",
+    };
+  }
   const runtimeStatus =
-    summary && typeof summary === "object"
-      ? asTrimmed(summary.status ?? "")
-      : "";
-  const normalizedStatus = runtimeStatus || "unknown";
+    summary && typeof summary === "object" ? asTrimmed(summary.status ?? "") : "";
+  if (!runtimeStatus) {
+    return {
+      pass: false,
+      connected: false,
+      status: null,
+      message: "runtime preflight failed: summary.status missing in /api/runtime/summary payload",
+    };
+  }
+  const normalizedStatus = runtimeStatus;
   const connected = normalizedStatus === "connected";
 
   if (connected) {

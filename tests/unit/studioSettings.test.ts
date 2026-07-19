@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  defaultStudioSettings,
   mergeStudioSettings,
   normalizeStudioSettings,
   resolveFocusedPreference,
@@ -15,6 +16,10 @@ describe("studio settings normalization", () => {
     expect(normalized.avatars).toEqual({});
   });
 
+  it("returns defaults for array input", () => {
+    expect(normalizeStudioSettings([])).toEqual(defaultStudioSettings());
+  });
+
   it("normalizes gateway entries", () => {
     const normalized = normalizeStudioSettings({
       gateway: { url: " ws://localhost:18789 ", token: " token " },
@@ -27,6 +32,14 @@ describe("studio settings normalization", () => {
   it("normalizes loopback ip gateway urls to localhost", () => {
     const normalized = normalizeStudioSettings({
       gateway: { url: "ws://127.0.0.1:18789", token: "token" },
+    });
+
+    expect(normalized.gateway?.url).toBe("ws://localhost:18789");
+  });
+
+  it("normalizes bracketed ipv6 loopback gateway urls to localhost", () => {
+    const normalized = normalizeStudioSettings({
+      gateway: { url: "ws://[::1]:18789", token: "token" },
     });
 
     expect(normalized.gateway?.url).toBe("ws://localhost:18789");
@@ -160,18 +173,61 @@ describe("studio settings normalization", () => {
     });
   });
 
-  it("preserves gateway token when patching only url", () => {
+  it("merges focused patches across ipv6 loopback aliases under one key", () => {
     const current = normalizeStudioSettings({
-      gateway: { url: "ws://gateway.old:18789", token: "secret-token" },
+      focused: {
+        "ws://localhost:18789": {
+          mode: "focused",
+          selectedAgentId: "agent-1",
+          filter: "all",
+        },
+      },
     });
 
     const merged = mergeStudioSettings(current, {
-      gateway: { url: "ws://gateway.new:18789" },
+      focused: {
+        "ws://[::1]:18789": {
+          selectedAgentId: "agent-2",
+        },
+      },
+    });
+
+    expect(merged.focused).toEqual({
+      "ws://localhost:18789": {
+        mode: "focused",
+        selectedAgentId: "agent-2",
+        filter: "all",
+      },
+    });
+  });
+
+  it("preserves gateway token when patching only an equivalent loopback url", () => {
+    const current = normalizeStudioSettings({
+      gateway: { url: "ws://127.0.0.1:18789", token: "secret-token" },
+    });
+
+    const merged = mergeStudioSettings(current, {
+      gateway: { url: "ws://[::1]:18789" },
     });
 
     expect(merged.gateway).toEqual({
-      url: "ws://gateway.new:18789",
+      url: "ws://localhost:18789",
       token: "secret-token",
+    });
+  });
+
+  it("clears gateway token when a url-only patch changes upstream", () => {
+    const current = normalizeStudioSettings({
+      gateway: { url: "wss://gateway.old.example", token: "secret-token" },
+    });
+
+    const merged = mergeStudioSettings(current, {
+      gateway: { url: "wss://gateway.new.example" },
+    });
+
+    expect(merged.gateway).toEqual({
+      url: "wss://gateway.new.example",
+      token: "",
     });
   });
 

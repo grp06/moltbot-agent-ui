@@ -263,6 +263,82 @@ describe("hydrateAgentFleetFromGateway", () => {
     expect(result.sessionSettingsSyncedAgentIds).toHaveLength(agentCount);
   });
 
+  it("filters malformed gateway agent ids before listing previews", async () => {
+    const call = vi.fn(async (method: string, params: unknown) => {
+      if (method === "agents.list") {
+        return {
+          defaultId: "../agent-1",
+          mainKey: "main",
+          agents: [
+            { id: "../agent-1", name: "Bad" },
+            { id: " agent-1 ", name: "One" },
+            { id: "AGENT-1", name: "Duplicate" },
+          ],
+        };
+      }
+      if (method === "sessions.list") {
+        expect(params).toEqual({
+          includeGlobal: false,
+          includeUnknown: false,
+          search: ":main",
+        });
+        return {
+          sessions: [
+            { key: "agent:../agent-1:main", modelProvider: "openai", model: "bad" },
+            { key: "agent:agent-1:main", modelProvider: "openai", model: "gpt-5" },
+          ],
+        };
+      }
+      if (method === "exec.approvals.get") {
+        return { file: { agents: {} } };
+      }
+      if (method === "status") {
+        return { sessions: { recent: [], byAgent: [] } };
+      }
+      if (method === "sessions.preview") {
+        expect(params).toEqual({
+          keys: ["agent:agent-1:main"],
+          limit: 8,
+          maxChars: 240,
+        });
+        return {
+          ts: 1,
+          previews: [
+            {
+              key: "agent:agent-1:main",
+              status: "ok",
+              items: [{ role: "assistant", text: "ok", timestamp: 1 }],
+            },
+          ],
+        };
+      }
+      if (method === "config.get") {
+        return {
+          hash: "hash-safe",
+          config: { agents: { defaults: { model: "openai/gpt-5" }, list: [] } },
+        };
+      }
+      throw new Error(`Unhandled method: ${method}`);
+    });
+
+    const result = await hydrateAgentFleetFromGateway({
+      client: { call },
+      gatewayUrl: "ws://127.0.0.1:18789",
+      cachedConfigSnapshot: null,
+      loadStudioSettings: async () => ({
+        version: 1,
+        gateway: null,
+        gatewayAutoStart: true,
+        focused: {},
+        avatars: {},
+      }),
+      isDisconnectLikeError: () => false,
+    });
+
+    expect(result.seeds.map((seed) => seed.agentId)).toEqual(["agent-1"]);
+    expect(result.sessionCreatedAgentIds).toEqual(["agent-1"]);
+  });
+
   it("returns safely when batched sessions.list fails", async () => {
     const call = vi.fn(async (method: string) => {
       if (method === "agents.list") {

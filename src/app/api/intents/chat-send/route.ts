@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { executeGatewayIntent, parseIntentBody } from "@/lib/controlplane/intent-route";
+import { hasMalformedAgentSessionKey, resolveSafeSessionKey } from "@/lib/gateway/session-keys";
 
 export const runtime = "nodejs";
 
@@ -10,7 +11,12 @@ export async function POST(request: Request) {
     return bodyOrError as NextResponse;
   }
 
-  const sessionKey = typeof bodyOrError.sessionKey === "string" ? bodyOrError.sessionKey.trim() : "";
+  const rawSessionKey =
+    typeof bodyOrError.sessionKey === "string" ? bodyOrError.sessionKey : "";
+  if (hasMalformedAgentSessionKey(rawSessionKey)) {
+    return NextResponse.json({ error: "Invalid sessionKey." }, { status: 400 });
+  }
+  const sessionKey = resolveSafeSessionKey(rawSessionKey) ?? "";
   const message = typeof bodyOrError.message === "string" ? bodyOrError.message : "";
   const idempotencyKey =
     typeof bodyOrError.idempotencyKey === "string" ? bodyOrError.idempotencyKey.trim() : "";

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { NextResponse } from "next/server";
 
 import { deriveRuntimeFreshness } from "@/lib/controlplane/degraded-read";
@@ -13,6 +15,9 @@ import {
   clampGatewayChatHistoryLimit,
   GATEWAY_CHAT_HISTORY_MAX_LIMIT,
 } from "@/lib/gateway/chatHistoryLimits";
+import { isSafeAgentId } from "@/lib/agents/agentIds";
+import { sessionKeyBelongsToAgent } from "@/lib/gateway/session-keys";
+import { loadStudioSettings } from "@/lib/studio/settings-store";
 
 export const runtime = "nodejs";
 
@@ -51,6 +56,9 @@ const historyInFlight = new Map<string, Promise<HistoryCacheEntry>>();
 const HISTORY_DEBUG_ENABLED = /^(1|true|yes|on)$/i.test(
   (process.env.NEXT_PUBLIC_STUDIO_TRANSCRIPT_DEBUG ?? "").trim()
 );
+
+const hashCacheSecret = (value: string): string =>
+  value ? createHash("sha256").update(value).digest("hex") : "";
 
 const logHistoryRouteMetric = (metric: string, meta: Record<string, unknown>) => {
   if (!HISTORY_DEBUG_ENABLED) return;
@@ -184,6 +192,7 @@ const compactConversationMessages = (messages: SemanticHistoryMessage[]): Semant
 };
 
 const buildHistoryCacheKey = (params: {
+  gatewayScope: string;
   agentId: string;
   sessionKey: string;
   view: HistoryView;
@@ -194,6 +203,7 @@ const buildHistoryCacheKey = (params: {
   includeTools: boolean;
 }): string => {
   return [
+    params.gatewayScope,
     params.agentId,
     params.sessionKey,
     params.view,
@@ -262,6 +272,9 @@ const readHistoryCacheEntry = (params: {
   touchHistoryCacheEntry(entry);
   return entry;
 };
+
+const resolveHistoryCacheAgeMs = (entry: HistoryCacheEntry, nowMs: number): number =>
+  Math.max(0, nowMs - entry.cachedAtMs);
 
 const mapGatewayError = (error: unknown): NextResponse => {
   if (error instanceof ControlPlaneGatewayError) {
@@ -359,6 +372,7 @@ const resolveHistorySelectionPayload = async (params: {
     ) => Array<{ id: number }>;
   };
   agentId: string;
+  gatewayScope: string;
   fallbackRevision: number;
   sessionKey: string;
   view: HistoryView;
@@ -373,6 +387,7 @@ const resolveHistorySelectionPayload = async (params: {
   cacheAgeMs: number | null;
 }> => {
   const cacheKey = buildHistoryCacheKey({
+    gatewayScope: params.gatewayScope,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     view: params.view,
@@ -398,18 +413,20 @@ const resolveHistorySelectionPayload = async (params: {
     return {
       payload: cached.payload,
       cacheStatus: "hit",
-      cacheAgeMs: nowMs - cached.cachedAtMs,
+      cacheAgeMs: resolveHistoryCacheAgeMs(cached, nowMs),
     };
   }
 
   const inFlight = historyInFlight.get(cacheKey) ?? null;
   if (inFlight) {
     const shared = await inFlight;
-    if (shared.agentRevision === agentRevision && nowMs - shared.cachedAtMs <= HISTORY_CACHE_TTL_MS) {
+    const sharedNowMs = Date.now();
+    const sharedAgeMs = resolveHistoryCacheAgeMs(shared, sharedNowMs);
+    if (shared.agentRevision === agentRevision && sharedAgeMs <= HISTORY_CACHE_TTL_MS) {
       return {
         payload: shared.payload,
         cacheStatus: "coalesced",
-        cacheAgeMs: nowMs - shared.cachedAtMs,
+        cacheAgeMs: sharedAgeMs,
       };
     }
   }
@@ -456,15 +473,18 @@ export async function GET(
   context: { params: Promise<{ agentId: string }> }
 ) {
   const routeStartedAt = Date.now();
-  const bootstrap = await bootstrapDomainRuntime();
-  if (bootstrap.kind === "mode-disabled") {
-    return NextResponse.json({ enabled: false, error: "domain_api_mode_disabled" }, { status: 404 });
-  }
-
   const { agentId } = await context.params;
   const normalizedAgentId = agentId.trim();
   if (!normalizedAgentId) {
     return NextResponse.json({ error: "agentId is required." }, { status: 400 });
+  }
+  if (!isSafeAgentId(normalizedAgentId)) {
+    return NextResponse.json({ error: `Invalid agentId: ${normalizedAgentId}` }, { status: 400 });
+  }
+
+  const bootstrap = await bootstrapDomainRuntime();
+  if (bootstrap.kind === "mode-disabled") {
+    return NextResponse.json({ enabled: false, error: "domain_api_mode_disabled" }, { status: 404 });
   }
 
   if (bootstrap.kind === "runtime-init-failed") {
@@ -482,6 +502,12 @@ export async function GET(
   const url = new URL(request.url);
   const sessionKeyRaw = (url.searchParams.get("sessionKey") ?? "").trim();
   const sessionKey = sessionKeyRaw || `agent:${normalizedAgentId}:main`;
+  if (!sessionKeyBelongsToAgent(sessionKey, normalizedAgentId)) {
+    return NextResponse.json(
+      { error: "sessionKey does not match agentId." },
+      { status: 400 }
+    );
+  }
   const view = resolveView(url.searchParams.get("view"));
   const limit = resolveRawLimit(url.searchParams.get("limit"));
   const turnLimit = resolveTurnLimit(url.searchParams.get("turnLimit"));
@@ -492,6 +518,10 @@ export async function GET(
   );
   const includeTools = resolveBooleanQueryParam(url.searchParams.get("includeTools"), true);
   const snapshot = controlPlane.snapshot();
+  const settings = loadStudioSettings();
+  const gatewayUrl = settings.gateway?.url?.trim() ?? "";
+  const gatewayToken = settings.gateway?.token?.trim() ?? "";
+  const gatewayScope = `${gatewayUrl}\u001f${hashCacheSecret(gatewayToken)}`;
   let payload: HistorySelectionPayload;
   let cacheStatus: HistoryCacheStatus = "miss";
   let cacheAgeMs: number | null = null;
@@ -499,6 +529,7 @@ export async function GET(
     const result = await resolveHistorySelectionPayload({
       controlPlane,
       agentId: normalizedAgentId,
+      gatewayScope,
       fallbackRevision: snapshot.outboxHead,
       sessionKey,
       view,

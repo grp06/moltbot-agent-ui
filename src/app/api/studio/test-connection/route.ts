@@ -4,7 +4,7 @@ import {
   OpenClawGatewayAdapter,
   serializeControlPlaneGatewayConnectFailure,
 } from "@/lib/controlplane/openclaw-adapter";
-import { loadStudioSettings } from "@/lib/studio/settings-store";
+import { resolveGatewayTokenForUrl } from "@/lib/studio/settings-store";
 
 export const runtime = "nodejs";
 
@@ -18,14 +18,16 @@ type TestConnectionRequestBody = {
 
 const readString = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
 
-const resolveStoredToken = (): string => {
-  return readString(loadStudioSettings().gateway?.token);
-};
-
 export async function POST(request: Request) {
   let adapter: OpenClawGatewayAdapter | null = null;
+  let body: TestConnectionRequestBody;
   try {
-    const body = (await request.json()) as TestConnectionRequestBody;
+    body = (await request.json()) as TestConnectionRequestBody;
+  } catch {
+    return NextResponse.json({ ok: false, error: "Invalid JSON payload." }, { status: 400 });
+  }
+
+  try {
     const url = readString(body?.gateway?.url);
     if (!url) {
       return NextResponse.json({ ok: false, error: "Gateway URL is required." }, { status: 400 });
@@ -33,7 +35,7 @@ export async function POST(request: Request) {
 
     const tokenInput = readString(body?.gateway?.token);
     const useStoredToken = body?.useStoredToken !== false;
-    const token = tokenInput || (useStoredToken ? resolveStoredToken() : "");
+    const token = tokenInput || (useStoredToken ? resolveGatewayTokenForUrl(url) : "");
     if (!token) {
       return NextResponse.json(
         {

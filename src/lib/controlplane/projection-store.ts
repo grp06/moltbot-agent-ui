@@ -9,8 +9,10 @@ import type {
   ControlPlaneOutboxEntry,
   ControlPlaneRuntimeSnapshot,
 } from "@/lib/controlplane/contracts";
+import { resolveSafeAgentId } from "@/lib/agents/agentIds";
 import { deriveControlPlaneEventKey } from "@/lib/controlplane/outbox";
 import { resolveStateDir } from "@/lib/clawdbot/paths";
+import { parseAgentIdFromSessionKey } from "@/lib/gateway/session-keys";
 
 const require = createRequire(import.meta.url);
 
@@ -20,7 +22,6 @@ const RUNTIME_DB_FILENAME = "runtime.db";
 const DEFAULT_STATUS = "stopped" as const;
 const NO_AGENT_SENTINEL = "";
 const DEFAULT_BACKFILL_BATCH_LIMIT = 500;
-const AGENT_SESSION_KEY_RE = /^agent:([^:]+):(.+)$/i;
 
 type OutboxRow = {
   id: number;
@@ -59,29 +60,27 @@ const parseDomainEvent = (raw: string): ControlPlaneDomainEvent => {
 const isObject = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === "object");
 
-const parseAgentIdFromSessionKey = (value: unknown): string | null => {
+const resolveEventAgentId = (value: unknown): string | null => {
+  const resolved = resolveSafeAgentId(value);
+  return resolved ? resolved.toLowerCase() : null;
+};
+
+const resolveEventSessionAgentId = (value: unknown): string | null => {
   if (typeof value !== "string") return null;
-  const raw = value.trim();
-  if (!raw) return null;
-  const match = raw.match(AGENT_SESSION_KEY_RE);
-  if (!match) return null;
-  const agentId = match[1]?.trim().toLowerCase() ?? "";
-  const rest = match[2]?.trim() ?? "";
-  if (!agentId || !rest) return null;
-  return agentId;
+  const resolved = parseAgentIdFromSessionKey(value);
+  return resolved ? resolved.toLowerCase() : null;
 };
 
 const resolveAgentIdFromControlPlaneEvent = (event: ControlPlaneDomainEvent): string | null => {
   if (event.type !== "gateway.event") return null;
   const payload = event.payload;
   if (!isObject(payload)) return null;
-  const directAgentId =
-    typeof payload.agentId === "string" ? payload.agentId.trim().toLowerCase() : "";
+  const directAgentId = resolveEventAgentId(payload.agentId);
   if (directAgentId) return directAgentId;
   return (
-    parseAgentIdFromSessionKey(payload.sessionKey) ??
-    parseAgentIdFromSessionKey(payload.key) ??
-    parseAgentIdFromSessionKey(payload.runSessionKey)
+    resolveEventSessionAgentId(payload.sessionKey) ??
+    resolveEventSessionAgentId(payload.key) ??
+    resolveEventSessionAgentId(payload.runSessionKey)
   );
 };
 

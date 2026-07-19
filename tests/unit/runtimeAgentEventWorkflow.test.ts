@@ -394,4 +394,25 @@ describe("runtime agent event workflow", () => {
     expect(lifecycle).toBeDefined();
     expect(findIntent([], "clearRunTracking")).toBeUndefined();
   });
+
+  it("does not let a mismatched lifecycle start replace the active run", () => {
+    const result = planRuntimeAgentEvent(
+      createInput({
+        payload: createPayload({
+          runId: "run-old",
+          stream: "lifecycle",
+          data: { phase: "start" },
+        }),
+        agent: createAgent({ runId: "run-new", status: "running" }),
+        activeRunId: "run-new",
+      })
+    );
+
+    expect(result.commands).toEqual([
+      {
+        kind: "applyPolicyIntents",
+        intents: [{ kind: "clearRunTracking", runId: "run-old" }],
+      },
+    ]);
+  });
 });

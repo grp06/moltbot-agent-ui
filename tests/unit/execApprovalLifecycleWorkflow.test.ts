@@ -120,6 +120,64 @@ describe("execApprovalLifecycleWorkflow", () => {
     expect(unscopedEffects?.markActivityAgentIds).toEqual([]);
   });
 
+  it("does not scope requested approvals to unsafe or unknown agent ids", () => {
+    const agents = [createAgent("agent-1", "agent:agent-1:main")];
+    const unsafeEvent: EventFrame = {
+      type: "event",
+      event: "exec.approval.requested",
+      payload: {
+        id: "approval-unsafe",
+        request: {
+          command: "npm run test",
+          cwd: "/repo",
+          host: "gateway",
+          security: "allowlist",
+          ask: "always",
+          agentId: "../agent-1",
+          resolvedPath: "/usr/bin/npm",
+          sessionKey: "agent:../agent-1:main",
+        },
+        createdAtMs: 123,
+        expiresAtMs: 456,
+      },
+    };
+    const unknownWithMatchingSessionEvent: EventFrame = {
+      type: "event",
+      event: "exec.approval.requested",
+      payload: {
+        id: "approval-session",
+        request: {
+          command: "npm run lint",
+          cwd: "/repo",
+          host: "gateway",
+          security: "allowlist",
+          ask: "always",
+          agentId: "missing",
+          resolvedPath: "/usr/bin/npm",
+          sessionKey: "agent:agent-1:main",
+        },
+        createdAtMs: 223,
+        expiresAtMs: 456,
+      },
+    };
+
+    const unsafeEffects = resolveExecApprovalEventEffects({
+      event: unsafeEvent,
+      agents,
+    });
+    expect(unsafeEffects?.scopedUpserts).toEqual([]);
+    expect(unsafeEffects?.unscopedUpserts).toEqual([
+      expect.objectContaining({ id: "approval-unsafe", agentId: null, sessionKey: null }),
+    ]);
+
+    const sessionEffects = resolveExecApprovalEventEffects({
+      event: unknownWithMatchingSessionEvent,
+      agents,
+    });
+    expect(sessionEffects?.scopedUpserts.map((entry) => entry.agentId)).toEqual(["agent-1"]);
+    expect(sessionEffects?.markActivityAgentIds).toEqual(["agent-1"]);
+  });
+
   it("maps resolved approval event into remove effects", () => {
     const event: EventFrame = {
       type: "event",
@@ -175,6 +233,44 @@ describe("execApprovalLifecycleWorkflow", () => {
       agentId: null,
       sessionKey: null,
       message: null,
+    });
+  });
+
+  it("does not send follow-up intents to unsafe or unknown scoped agent ids", () => {
+    const agents = [createAgent("agent-1", "agent:agent-1:main")];
+
+    expect(
+      resolveExecApprovalFollowUpIntent({
+        decision: "allow-once",
+        approval: createApproval({
+          agentId: "../agent-1",
+          sessionKey: "agent:../agent-1:main",
+        }),
+        agents,
+        followUpMessage: "approval granted",
+      })
+    ).toEqual({
+      shouldSend: false,
+      agentId: null,
+      sessionKey: null,
+      message: null,
+    });
+
+    expect(
+      resolveExecApprovalFollowUpIntent({
+        decision: "allow-once",
+        approval: createApproval({
+          agentId: "missing",
+          sessionKey: "agent:agent-1:main",
+        }),
+        agents,
+        followUpMessage: "approval granted",
+      })
+    ).toEqual({
+      shouldSend: true,
+      agentId: "agent-1",
+      sessionKey: "agent:agent-1:main",
+      message: "approval granted",
     });
   });
 

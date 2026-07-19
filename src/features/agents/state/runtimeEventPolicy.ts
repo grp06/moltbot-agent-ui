@@ -112,9 +112,7 @@ export const decideRuntimeChatEvent = (
     return intents;
   }
 
-  const allowAbortedRunMismatchRecovery =
-    input.state === "aborted" && input.agentStatus === "running";
-  if (runId && activeRunId && activeRunId !== runId && !allowAbortedRunMismatchRecovery) {
+  if (runId && activeRunId && activeRunId !== runId) {
     return [{ kind: "clearRunTracking", runId }];
   }
   if (runId && input.isStaleTerminal) {
@@ -174,18 +172,21 @@ export const decideRuntimeChatEvent = (
 export const decideRuntimeAgentEvent = (
   input: RuntimeAgentPolicyInput
 ): RuntimePolicyIntent[] => {
-  if (!isLifecycleStart(input.stream, input.phase) && input.isClosedRun) {
+  const lifecycleStart = isLifecycleStart(input.stream, input.phase);
+  if (input.isClosedRun) {
     return [{ kind: "ignore", reason: "closed-run-event" }];
   }
-  if (input.activeRunId && input.activeRunId !== input.runId) {
-    if (!isLifecycleStart(input.stream, input.phase)) {
+  if (lifecycleStart) {
+    if (input.activeRunId && input.activeRunId !== input.runId) {
       return [{ kind: "clearRunTracking", runId: input.runId }];
     }
+    return [];
+  }
+  if (input.activeRunId && input.activeRunId !== input.runId) {
+    return [{ kind: "clearRunTracking", runId: input.runId }];
   }
   if (!input.activeRunId && input.agentStatus !== "running") {
-    if (!isLifecycleStart(input.stream, input.phase)) {
-      return [{ kind: "clearRunTracking", runId: input.runId }];
-    }
+    return [{ kind: "clearRunTracking", runId: input.runId }];
   }
   return [];
 };

@@ -24,6 +24,7 @@ import {
   extractThinkingFromTaggedStream,
   extractToolLines,
   formatToolCallMarkdown,
+  hasUnclosedThinkingTag,
   isUiMetadataPrefix,
   stripUiMetadata,
 } from "@/lib/text/message-extract";
@@ -74,21 +75,6 @@ const extractReasoningBody = (value: string): string | null => {
 
 const normalizeReasoningComparable = (value: string): string =>
   normalizeAssistantDisplayText(value).trim().toLowerCase();
-
-const hasUnclosedThinkingTag = (value: string): boolean => {
-  const openMatches = [
-    ...value.matchAll(/<\s*(?:think(?:ing)?|analysis|thought|antthinking)\s*>/gi),
-  ];
-  if (openMatches.length === 0) return false;
-  const closeMatches = [
-    ...value.matchAll(/<\s*\/\s*(?:think(?:ing)?|analysis|thought|antthinking)\s*>/gi),
-  ];
-  const lastOpen = openMatches[openMatches.length - 1];
-  const lastClose = closeMatches[closeMatches.length - 1];
-  if (!lastOpen) return false;
-  if (!lastClose) return true;
-  return (lastClose.index ?? -1) < (lastOpen.index ?? -1);
-};
 
 const hasReasoningSignal = ({
   rawText,

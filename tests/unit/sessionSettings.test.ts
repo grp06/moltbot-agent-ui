@@ -51,6 +51,18 @@ describe("session settings sync helper", () => {
     ).rejects.toThrow("At least one session setting must be provided.");
   });
 
+  it("throws when an agent-prefixed session key has an unsafe agent id", async () => {
+    const client = { call: vi.fn() } as unknown as GatewayClient;
+    await expect(
+      syncGatewaySessionSettings({
+        client,
+        sessionKey: "agent:../agent-1:main",
+        model: "openai/gpt-5",
+      })
+    ).rejects.toThrow("Invalid sessionKey.");
+    expect(client.call).not.toHaveBeenCalled();
+  });
+
   it("patches model and thinking level together", async () => {
     const client = {
       call: vi.fn(async () => ({ ok: true })),

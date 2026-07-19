@@ -583,6 +583,51 @@ describe("useChatInteractionController", () => {
     expect(ctx.call).not.toHaveBeenCalledWith("sessions.reset", expect.anything());
   });
 
+  it("discards pending draft and live patch when starting a new session", async () => {
+    let queuedFrame: ((time: number) => void) | null = null;
+    globalThis.requestAnimationFrame = vi.fn((callback: (time: number) => void) => {
+      queuedFrame = callback;
+      return 91;
+    });
+    globalThis.cancelAnimationFrame = vi.fn();
+    const ctx = renderController({
+      agents: [
+        createAgent({
+          agentId: "agent-1",
+          runId: "run-42",
+          sessionKey: "session-42",
+        }),
+      ],
+    });
+
+    act(() => {
+      ctx.getValue().handleDraftChange("agent-1", "stale draft");
+      ctx.getValue().queueLivePatch("agent-1", { streamText: "stale stream" });
+    });
+
+    await act(async () => {
+      await ctx.getValue().handleNewSession("agent-1");
+    });
+
+    await vi.advanceTimersByTimeAsync(300);
+    if (queuedFrame) {
+      act(() => {
+        queuedFrame?.(0);
+      });
+    }
+
+    const stalePatches = ctx.dispatch.mock.calls
+      .map(([action]: [InteractionDispatchAction]) => action)
+      .filter(
+        (action) =>
+          action.type === "updateAgent" &&
+          action.agentId === "agent-1" &&
+          (action.patch?.draft === "stale draft" || action.patch?.streamText === "stale stream")
+      );
+    expect(stalePatches).toEqual([]);
+    expect(globalThis.cancelAnimationFrame).toHaveBeenCalledWith(91);
+  });
+
   it("does not switch to domain intents when explicit mode flag is false", async () => {
     process.env.NEXT_PUBLIC_STUDIO_DOMAIN_API_MODE = "true";
     const call = vi.fn(async () => ({}));

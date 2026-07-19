@@ -6,6 +6,8 @@ import {
 } from "@/features/agents/approvals/pendingStore";
 import { shouldTreatExecApprovalResolveErrorAsUnknownId } from "@/features/agents/approvals/execApprovalLifecycleWorkflow";
 import type { RuntimeWriteTransport } from "@/features/agents/operations/runtimeWriteTransport";
+import { resolveSafeAgentId } from "@/lib/agents/agentIds";
+import { resolveSafeSessionKey } from "@/lib/gateway/session-keys";
 
 type SetState<T> = (next: T | ((current: T) => T)) => void;
 
@@ -50,13 +52,14 @@ export const resolveExecApprovalViaStudio = async (params: {
 
   const resolveApprovalTargetAgentId = (approval: PendingExecApproval | null): string | null => {
     if (!approval) return null;
-    const scopedAgentId = approval.agentId?.trim() ?? "";
-    if (scopedAgentId) return scopedAgentId;
-    const scopedSessionKey = approval.sessionKey?.trim() ?? "";
+    const agents = params.getAgents();
+    const scopedAgentId = resolveSafeAgentId(approval.agentId) ?? "";
+    if (scopedAgentId && agents.some((agent) => agent.agentId === scopedAgentId)) {
+      return scopedAgentId;
+    }
+    const scopedSessionKey = resolveSafeSessionKey(approval.sessionKey) ?? "";
     if (!scopedSessionKey) return null;
-    const matched = params
-      .getAgents()
-      .find((agent) => agent.sessionKey.trim() === scopedSessionKey);
+    const matched = agents.find((agent) => agent.sessionKey.trim() === scopedSessionKey);
     return matched?.agentId ?? null;
   };
 

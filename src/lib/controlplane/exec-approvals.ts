@@ -1,5 +1,6 @@
 import type { ControlPlaneRuntime } from "@/lib/controlplane/runtime";
 import { ControlPlaneGatewayError } from "@/lib/controlplane/openclaw-adapter";
+import { resolveSafeAgentId } from "@/lib/agents/agentIds";
 
 type GatewayExecApprovalSecurity = "deny" | "allowlist" | "full";
 type GatewayExecApprovalAsk = "off" | "on-miss" | "always";
@@ -124,29 +125,50 @@ const buildNextExecApprovalsFile = (
   };
 };
 
+const resolveAgentId = (value: string) => {
+  const agentId = resolveSafeAgentId(value);
+  if (!agentId) {
+    const trimmed = value.trim();
+    throw new Error(trimmed ? `Invalid agentId: ${trimmed}` : "Agent id is required.");
+  }
+  return agentId;
+};
+
+const buildExecApprovalsSetPayload = (
+  snapshot: ExecApprovalsSnapshot,
+  file: ExecApprovalsFile
+) => {
+  const requiresBaseHash = snapshot.exists !== false;
+  const baseHash = requiresBaseHash ? snapshot.hash?.trim() : undefined;
+  if (requiresBaseHash && !baseHash) {
+    throw new Error("Exec approvals hash unavailable; re-run exec.approvals.get.");
+  }
+  return {
+    file,
+    ...(baseHash ? { baseHash } : {}),
+  };
+};
+
 export const upsertAgentExecApprovalsPolicyViaRuntime = async (params: {
   runtime: ControlPlaneRuntime;
   agentId: string;
   role: ExecutionRoleId;
 }): Promise<void> => {
-  const agentId = params.agentId.trim();
-  if (!agentId) {
-    throw new Error("Agent id is required.");
-  }
+  const agentId = resolveAgentId(params.agentId);
 
   const snapshot = await params.runtime.callGateway<ExecApprovalsSnapshot>("exec.approvals.get", {});
   const nextFile = buildNextExecApprovalsFile(snapshot.file, agentId, params.role);
 
-  const setPayload = { file: nextFile, ...(snapshot.exists ? { baseHash: snapshot.hash } : {}) };
+  const setPayload = buildExecApprovalsSetPayload(snapshot, nextFile);
   try {
     await params.runtime.callGateway("exec.approvals.set", setPayload);
   } catch (err) {
     if (!isRetryableSetError(err)) throw err;
     const retrySnapshot = await params.runtime.callGateway<ExecApprovalsSnapshot>("exec.approvals.get", {});
     const retryNextFile = buildNextExecApprovalsFile(retrySnapshot.file, agentId, params.role);
-    await params.runtime.callGateway("exec.approvals.set", {
-      file: retryNextFile,
-      ...(retrySnapshot.exists ? { baseHash: retrySnapshot.hash } : {}),
-    });
+    await params.runtime.callGateway(
+      "exec.approvals.set",
+      buildExecApprovalsSetPayload(retrySnapshot, retryNextFile)
+    );
   }
 };

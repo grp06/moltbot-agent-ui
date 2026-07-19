@@ -2,6 +2,10 @@ import { useCallback, useEffect, useRef } from "react";
 
 import { hydrateDomainHistoryWindow } from "@/features/agents/operations/domainHistoryHydration";
 import {
+  executeAgentReconcileCommands,
+  runAgentReconcileOperation,
+} from "@/features/agents/operations/agentReconcileOperation";
+import {
   buildCachedHistoryWindowKey,
   readCachedHistoryWindow,
   writeCachedHistoryWindow,
@@ -11,7 +15,9 @@ import {
   RUNTIME_SYNC_MAX_HISTORY_LIMIT,
   resolveRuntimeSyncBootstrapHistoryAgentIds,
   resolveRuntimeSyncLoadMoreHistoryLimit,
+  resolveRuntimeSyncReconcilePollingIntent,
 } from "@/features/agents/operations/runtimeSyncControlWorkflow";
+import type { RuntimeWriteTransport } from "@/features/agents/operations/runtimeWriteTransport";
 import type { AgentState } from "@/features/agents/state/store";
 import { logTranscriptDebugMetric } from "@/features/agents/state/transcript";
 import {
@@ -36,6 +42,8 @@ type UseRuntimeSyncControllerParams = {
   agents: AgentState[];
   focusedAgentId: string | null;
   dispatch: (action: RuntimeSyncDispatchAction) => void;
+  runtimeWriteTransport: Pick<RuntimeWriteTransport, "agentWait">;
+  clearRunTracking: (runId: string) => void;
   isDisconnectLikeError: (error: unknown) => boolean;
   defaultHistoryLimit?: number;
   maxHistoryLimit?: number;
@@ -115,18 +123,26 @@ const resolveScanLimitForReason = (params: {
   return Math.min(params.maxHistoryLimit, Math.max(floor, params.requestedLimit * 3));
 };
 
+const HISTORY_MEMORY_CACHE_KEY_SEPARATOR = "\u001f";
+
 const buildHistoryMemoryCacheKey = (params: {
+  gatewayUrl: string;
   sessionKey: string;
   sessionEpoch: number;
   includeTraceHistory: boolean;
   includeTools: boolean;
 }): string => {
   return [
+    params.gatewayUrl.trim(),
     params.sessionKey.trim(),
     String(normalizeSessionEpoch(params.sessionEpoch)),
     params.includeTraceHistory ? "trace:1" : "trace:0",
     params.includeTools ? "tools:1" : "tools:0",
-  ].join("\u001f");
+  ].join(HISTORY_MEMORY_CACHE_KEY_SEPARATOR);
+};
+
+const historyMemoryCacheKeyMatchesSession = (key: string, sessionKey: string): boolean => {
+  return key.split(HISTORY_MEMORY_CACHE_KEY_SEPARATOR)[1] === sessionKey;
 };
 
 const resolveVisibleHistoryLimit = (params: {
@@ -185,6 +201,8 @@ export function useRuntimeSyncController(
     agents,
     focusedAgentId,
     dispatch,
+    runtimeWriteTransport,
+    clearRunTracking,
     isDisconnectLikeError,
   } = params;
   const agentsRef = useRef(agents);
@@ -196,6 +214,7 @@ export function useRuntimeSyncController(
   const historyPrefetchRef = useRef<Map<string, ScheduledPrefetchEntry>>(new Map());
   const previewInFlightRef = useRef<Set<string>>(new Set());
   const previewBootstrapAttemptedRef = useRef<Set<string>>(new Set());
+  const reconcileRunIdsInFlightRef = useRef<Set<string>>(new Set());
 
   const defaultHistoryLimit = params.defaultHistoryLimit ?? RUNTIME_SYNC_DEFAULT_HISTORY_LIMIT;
   const maxHistoryLimit = params.maxHistoryLimit ?? RUNTIME_SYNC_MAX_HISTORY_LIMIT;
@@ -208,7 +227,7 @@ export function useRuntimeSyncController(
     const normalizedSessionKey = sessionKey.trim();
     if (!normalizedSessionKey) return;
     for (const key of historyCacheRef.current.keys()) {
-      if (!key.startsWith(`${normalizedSessionKey}\u001f`)) continue;
+      if (!historyMemoryCacheKeyMatchesSession(key, normalizedSessionKey)) continue;
       historyCacheRef.current.delete(key);
     }
   }, []);
@@ -351,6 +370,7 @@ export function useRuntimeSyncController(
       const requestedLimit = Math.max(1, Math.min(maxHistoryLimit, requestedLimitRaw));
       const includeTraceHistory = targetAgent.showThinkingTraces === true;
       const memoryCacheKey = buildHistoryMemoryCacheKey({
+        gatewayUrl,
         sessionKey,
         sessionEpoch: normalizeSessionEpoch(targetAgent.sessionEpoch),
         includeTraceHistory,
@@ -675,13 +695,67 @@ export function useRuntimeSyncController(
   );
 
   const reconcileRunningAgents = useCallback(async () => {
-    return;
-  }, []);
+    if (status !== "connected") return;
+    const commands = await runAgentReconcileOperation({
+      waitForAgentRun: runtimeWriteTransport.agentWait,
+      agents: agentsRef.current,
+      getLatestAgent: (agentId) =>
+        agentsRef.current.find((entry) => entry.agentId === agentId) ?? null,
+      claimRunId: (runId) => {
+        if (reconcileRunIdsInFlightRef.current.has(runId)) return false;
+        reconcileRunIdsInFlightRef.current.add(runId);
+        return true;
+      },
+      releaseRunId: (runId) => {
+        reconcileRunIdsInFlightRef.current.delete(runId);
+      },
+      isDisconnectLikeError,
+    });
+    executeAgentReconcileCommands({
+      commands,
+      dispatch,
+      clearRunTracking,
+      requestHistoryRefresh: (agentId) => {
+        void loadAgentHistory(agentId, { reason: "refresh" });
+      },
+      logInfo: (message) => console.info(message),
+      logWarn: (message, error) => console.warn(message, error),
+    });
+  }, [
+    clearRunTracking,
+    dispatch,
+    isDisconnectLikeError,
+    loadAgentHistory,
+    runtimeWriteTransport.agentWait,
+    status,
+  ]);
 
   useEffect(() => {
     if (status !== "connected") return;
     void loadSummarySnapshot();
   }, [loadSummarySnapshot, status]);
+
+  useEffect(() => {
+    const intent = resolveRuntimeSyncReconcilePollingIntent({ status });
+    if (intent.kind === "stop") {
+      reconcileRunIdsInFlightRef.current.clear();
+      return;
+    }
+
+    let cancelled = false;
+    const run = () => {
+      if (cancelled) return;
+      void reconcileRunningAgents();
+    };
+    if (intent.runImmediately) {
+      run();
+    }
+    const intervalId = window.setInterval(run, intent.intervalMs);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [reconcileRunningAgents, status]);
 
   useEffect(() => {
     const normalizedFocusedAgentId = focusedAgentId?.trim() ?? "";
@@ -784,7 +858,7 @@ export function useRuntimeSyncController(
       if (transcriptEntries.length === 0) continue;
       const sessionEpoch = normalizeSessionEpoch(agent.sessionEpoch);
       const includeThinking = agent.showThinkingTraces === true;
-      const includeTools = agent.showThinkingTraces === true || agent.toolCallingEnabled === true;
+      const includeTools = includeThinking;
       const cacheKey = buildCachedHistoryWindowKey({
         gatewayUrl: gatewayCacheKey,
         agentId: agent.agentId,
@@ -918,11 +992,12 @@ export function useRuntimeSyncController(
       }),
     };
     historyPrefetchRef.current.set(sessionKey, scheduled);
+    const historyPrefetches = historyPrefetchRef.current;
     return () => {
-      const current = historyPrefetchRef.current.get(sessionKey) ?? null;
+      const current = historyPrefetches.get(sessionKey) ?? null;
       if (!current || current.targetLimit !== nextLimit) return;
       cancelIdlePrefetch(current.handle);
-      historyPrefetchRef.current.delete(sessionKey);
+      historyPrefetches.delete(sessionKey);
     };
   }, [
     agents,

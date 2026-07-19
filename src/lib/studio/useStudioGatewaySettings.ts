@@ -10,7 +10,9 @@ import {
   type StudioInstallContext,
 } from "@/lib/studio/install-context";
 import {
+  canUseLocalGatewayDefaultsForUrl,
   defaultStudioSettings,
+  normalizeGatewayUrl,
   type StudioGatewaySettings,
   type StudioSettings,
   type StudioSettingsPatch,
@@ -128,6 +130,7 @@ type StudioGatewaySettingsState = {
   localGatewayDefaults: StudioGatewaySettings | null;
   localGatewayDefaultsHasToken: boolean;
   hasStoredToken: boolean;
+  gatewayCredentialScope: string;
   hasUnsavedChanges: boolean;
   installContext: StudioInstallContext;
   domainApiModeEnabled: boolean;
@@ -183,6 +186,7 @@ export const useStudioGatewaySettings = (
   );
   const [localGatewayDefaultsHasToken, setLocalGatewayDefaultsHasToken] = useState(false);
   const [hasStoredToken, setHasStoredToken] = useState(false);
+  const [gatewayCredentialScope, setGatewayCredentialScope] = useState("");
   const [installContext, setInstallContext] = useState<StudioInstallContext>(
     defaultStudioInstallContext()
   );
@@ -275,6 +279,7 @@ export const useStudioGatewaySettings = (
       const nextUrl = gateway?.url?.trim() ? gateway.url : DEFAULT_UPSTREAM_GATEWAY_URL;
       setGatewayUrlState(nextUrl);
       setHasStoredToken(Boolean(envelope.gatewayMeta?.hasStoredToken));
+      setGatewayCredentialScope(readString(envelope.gatewayMeta?.credentialScope));
       setLocalGatewayDefaults(normalizeLocalGatewayDefaults(envelope.localGatewayDefaults));
       setLocalGatewayDefaultsHasToken(Boolean(envelope.localGatewayDefaultsMeta?.hasToken));
       setInstallContext(envelope.installContext ?? defaultStudioInstallContext());
@@ -321,7 +326,12 @@ export const useStudioGatewaySettings = (
     }
     const trimmedGatewayUrl = draftGatewayUrl.trim();
     const trimmedToken = token.trim();
-    const canUseExistingToken = hasStoredToken || localGatewayDefaultsHasToken;
+    const canUseLocalGatewayToken =
+      localGatewayDefaultsHasToken &&
+      canUseLocalGatewayDefaultsForUrl(trimmedGatewayUrl, localGatewayDefaults?.url);
+    const canUseStoredGatewayToken =
+      hasStoredToken && normalizeGatewayUrl(trimmedGatewayUrl) === normalizeGatewayUrl(gatewayUrl);
+    const canUseExistingToken = canUseStoredGatewayToken || canUseLocalGatewayToken;
     if (!trimmedGatewayUrl) {
       setActionError("Gateway URL is required.");
       setTestResult(null);
@@ -371,7 +381,9 @@ export const useStudioGatewaySettings = (
     applySettingsEnvelope,
     disconnecting,
     draftGatewayUrl,
+    gatewayUrl,
     hasStoredToken,
+    localGatewayDefaults,
     localGatewayDefaultsHasToken,
     refreshRuntimeStatus,
     settingsCoordinator,
@@ -508,6 +520,7 @@ export const useStudioGatewaySettings = (
       localGatewayDefaults,
       localGatewayDefaultsHasToken,
       hasStoredToken,
+      gatewayCredentialScope,
       hasUnsavedChanges,
       installContext,
       domainApiModeEnabled,
@@ -533,6 +546,7 @@ export const useStudioGatewaySettings = (
       domainApiModeEnabled,
       error,
       gatewayUrl,
+      gatewayCredentialScope,
       hasStoredToken,
       hasUnsavedChanges,
       installContext,

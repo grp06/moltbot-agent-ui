@@ -32,6 +32,15 @@ describe("gateway ssh target resolution", () => {
     ).toBe("ubuntu@example.test");
   });
 
+  it("strips brackets from ipv6 gateway urls when deriving ssh target", () => {
+    expect(
+      resolveGatewaySshTargetFromGatewayUrl(
+        "wss://[fd7a:115c:a1e0::1]:18789",
+        {} as unknown as NodeJS.ProcessEnv
+      )
+    ).toBe("ubuntu@fd7a:115c:a1e0::1");
+  });
+
   it("throws_on_missing_gateway_url_when_no_env_override", () => {
     expect(() =>
       resolveGatewaySshTargetFromGatewayUrl("", {} as unknown as NodeJS.ProcessEnv)

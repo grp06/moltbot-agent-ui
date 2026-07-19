@@ -11,7 +11,7 @@ type StudioSettingsFixture = {
 type StudioRouteEnvelopeFixture = {
   localGatewayDefaults?: { url: string; token: string } | null;
   localGatewayDefaultsMeta?: { hasToken: boolean };
-  gatewayMeta?: { hasStoredToken: boolean };
+  gatewayMeta?: { hasStoredToken: boolean; credentialScope?: string };
   installContext?: StudioInstallContext;
   domainApiModeEnabled?: boolean;
 };

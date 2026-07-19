@@ -58,7 +58,17 @@ type SpecialLatestUpdateOperation = {
 export function createSpecialLatestUpdateOperation(
   deps: SpecialLatestUpdateDeps
 ): SpecialLatestUpdateOperation {
-  const inFlight = new Set<string>();
+  const inFlightTokenByAgent = new Map<string, number>();
+  let nextInFlightToken = 1;
+
+  const dispatchIfCurrent = (
+    agentId: string,
+    token: number,
+    patch: { latestOverride: string | null; latestOverrideKind: "heartbeat" | "cron" | null }
+  ) => {
+    if (inFlightTokenByAgent.get(agentId) !== token) return;
+    deps.dispatchUpdateAgent(agentId, patch);
+  };
 
   const update: SpecialLatestUpdateOperation["update"] = async (agentId, agent, message) => {
     const intent = resolveLatestUpdateIntent({
@@ -69,13 +79,16 @@ export function createSpecialLatestUpdateOperation(
     });
     if (intent.kind === "noop") return;
     if (intent.kind === "reset") {
+      inFlightTokenByAgent.delete(agentId);
       deps.dispatchUpdateAgent(agent.agentId, buildLatestUpdatePatch(""));
       return;
     }
 
     const key = agentId;
-    if (inFlight.has(key)) return;
-    inFlight.add(key);
+    if (inFlightTokenByAgent.has(key)) return;
+    const token = nextInFlightToken;
+    nextInFlightToken += 1;
+    inFlightTokenByAgent.set(key, token);
 
     try {
       if (intent.kind === "fetch-heartbeat") {
@@ -86,7 +99,7 @@ export function createSpecialLatestUpdateOperation(
           limit: intent.historyLimit,
         });
         const content = findLatestHeartbeatResponse(history.messages) ?? "";
-        deps.dispatchUpdateAgent(agent.agentId, buildLatestUpdatePatch(content, "heartbeat"));
+        dispatchIfCurrent(agent.agentId, token, buildLatestUpdatePatch(content, "heartbeat"));
         return;
       }
 
@@ -94,7 +107,7 @@ export function createSpecialLatestUpdateOperation(
         const cronResult = await deps.listCronJobs();
         const job = deps.resolveCronJobForAgent(cronResult.jobs, intent.agentId);
         const content = job ? deps.formatCronJobDisplay(job) : "";
-        deps.dispatchUpdateAgent(agent.agentId, buildLatestUpdatePatch(content, "cron"));
+        dispatchIfCurrent(agent.agentId, token, buildLatestUpdatePatch(content, "cron"));
       }
     } catch (err) {
       if (!deps.isDisconnectLikeError(err)) {
@@ -103,12 +116,14 @@ export function createSpecialLatestUpdateOperation(
         deps.logError(message);
       }
     } finally {
-      inFlight.delete(key);
+      if (inFlightTokenByAgent.get(key) === token) {
+        inFlightTokenByAgent.delete(key);
+      }
     }
   };
 
   const clearInFlight: SpecialLatestUpdateOperation["clearInFlight"] = (agentId) => {
-    inFlight.delete(agentId);
+    inFlightTokenByAgent.delete(agentId);
   };
 
   return { update, clearInFlight };

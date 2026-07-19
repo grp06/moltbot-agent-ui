@@ -12,7 +12,7 @@ export const isGatewayDisconnectLikeError = (err: unknown): boolean => {
     return true;
   }
 
-  const match = msg.match(/gateway closed \\((\\d+)\\)/);
+  const match = msg.match(/gateway closed \((\d+)\)/);
   if (!match) return false;
   const code = Number(match[1]);
   return Number.isFinite(code) && code === 1012;

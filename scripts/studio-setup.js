@@ -1,9 +1,8 @@
 const fs = require("node:fs");
-const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const readline = require("node:readline/promises");
 
-const { resolveStudioSettingsPath } = require("../server/studio-settings");
+const { resolveStudioSettingsPath, writeJsonFileAtomic } = require("../server/studio-settings");
 
 const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
 
@@ -30,7 +29,6 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
 
   const settingsPath = resolveStudioSettingsPath(process.env);
-  const settingsDir = path.dirname(settingsPath);
 
   if (fs.existsSync(settingsPath) && !args.force) {
     console.error(
@@ -66,7 +64,6 @@ async function main() {
       );
     }
 
-    fs.mkdirSync(settingsDir, { recursive: true });
     const next = {
       version: 1,
       gateway: {
@@ -74,7 +71,7 @@ async function main() {
         token,
       },
     };
-    fs.writeFileSync(settingsPath, JSON.stringify(next, null, 2), "utf8");
+    writeJsonFileAtomic(settingsPath, next);
 
     console.info(`Wrote Studio settings to ${settingsPath}.`);
   } finally {
@@ -87,4 +84,3 @@ main().catch((err) => {
   console.error(msg);
   process.exitCode = 1;
 });
-

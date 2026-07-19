@@ -8,18 +8,19 @@ import { serializeRuntimeInitFailure } from "@/lib/controlplane/runtime-init-err
 import { ControlPlaneGatewayError } from "@/lib/controlplane/openclaw-adapter";
 import { bootstrapDomainRuntime } from "@/lib/controlplane/runtime-route-bootstrap";
 import { loadStudioSettings } from "@/lib/studio/settings-store";
+import { resolveSafeAgentId } from "@/lib/agents/agentIds";
+import { parseAgentIdFromSessionKey } from "@/lib/gateway/session-keys";
 
 export const runtime = "nodejs";
 
 const DEGRADED_FLEET_OUTBOX_SCAN_LIMIT = 5000;
-const AGENT_SESSION_KEY_RE = /^agent:([^:]+):/i;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === "object" && !Array.isArray(value));
 
 const normalizeAgentId = (value: unknown): string => {
-  if (typeof value !== "string") return "";
-  return value.trim().toLowerCase();
+  const resolved = resolveSafeAgentId(value);
+  return resolved ? resolved.toLowerCase() : "";
 };
 
 const normalizeAgentName = (value: unknown): string => {
@@ -27,10 +28,9 @@ const normalizeAgentName = (value: unknown): string => {
   return value.trim();
 };
 
-const parseAgentIdFromSessionKey = (value: unknown): string => {
+const normalizeSessionAgentId = (value: unknown): string => {
   if (typeof value !== "string") return "";
-  const match = value.trim().match(AGENT_SESSION_KEY_RE);
-  return match?.[1]?.trim().toLowerCase() ?? "";
+  return parseAgentIdFromSessionKey(value)?.toLowerCase() ?? "";
 };
 
 const resolveAgentIdentityFromOutboxEntry = (
@@ -42,9 +42,9 @@ const resolveAgentIdentityFromOutboxEntry = (
 
   const directAgentId = normalizeAgentId(payload.agentId);
   const sessionAgentId =
-    parseAgentIdFromSessionKey(payload.sessionKey) ||
-    parseAgentIdFromSessionKey(payload.key) ||
-    parseAgentIdFromSessionKey(payload.runSessionKey);
+    normalizeSessionAgentId(payload.sessionKey) ||
+    normalizeSessionAgentId(payload.key) ||
+    normalizeSessionAgentId(payload.runSessionKey);
   const agentId = directAgentId || sessionAgentId;
   if (!agentId) return null;
 

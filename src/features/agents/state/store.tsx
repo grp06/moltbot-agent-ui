@@ -377,7 +377,7 @@ const reducer = (state: AgentStoreState, action: Action): AgentStoreState => {
             sequenceKey: nextSequence,
           });
           if (!nextEntry) {
-            return { ...agent, outputLines: [...agent.outputLines, action.line] };
+            return agent;
           }
           const nextEntryId = nextEntry.entryId.trim();
           const existingIndex =

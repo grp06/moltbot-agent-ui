@@ -65,6 +65,21 @@ describe("agent state route", () => {
     expect(response.status).toBe(400);
   });
 
+  it("rejects malformed trash JSON without running mutations", async () => {
+    const response = await POST(
+      new Request("http://localhost/api/runtime/agent-state", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{",
+      })
+    );
+    const body = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe("Invalid JSON payload.");
+    expect(mockedSpawnSync).not.toHaveBeenCalled();
+  });
+
   it("rejects unsafe agentId", async () => {
     const response = await POST(
       new Request("http://localhost/api/runtime/agent-state", {
@@ -180,5 +195,20 @@ describe("agent state route", () => {
     const [cmd, args] = mockedSpawnSync.mock.calls[0] as [string, string[]];
     expect(cmd).toBe("ssh");
     expect(args).toEqual(expect.arrayContaining(["me@host.test"]));
+  });
+
+  it("rejects malformed restore JSON without running mutations", async () => {
+    const response = await PUT(
+      new Request("http://localhost/api/runtime/agent-state", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: "{",
+      })
+    );
+    const body = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe("Invalid JSON payload.");
+    expect(mockedSpawnSync).not.toHaveBeenCalled();
   });
 });

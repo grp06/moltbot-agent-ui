@@ -183,4 +183,95 @@ describe("specialLatestUpdateOperation", () => {
       buildLatestUpdatePatch("ok", "heartbeat")
     );
   });
+
+  it("invalidates pending async updates when in-flight state is cleared", async () => {
+    const agent = makeAgent();
+
+    let resolveOldHistory!: (value: DomainAgentHistoryResult) => void;
+    const oldHistoryPromise = new Promise<DomainAgentHistoryResult>((resolve) => {
+      resolveOldHistory = resolve;
+    });
+
+    const loadAgentHistoryWindow = vi
+      .fn()
+      .mockImplementationOnce(() => oldHistoryPromise)
+      .mockResolvedValueOnce(
+        makeHistoryResult([
+          { role: "user", content: "Read HEARTBEAT.md if it exists" },
+          { role: "assistant", content: "new response" },
+        ])
+      );
+    const dispatchUpdateAgent = vi.fn();
+    const operation = createSpecialLatestUpdateOperation({
+      loadAgentHistoryWindow,
+      listCronJobs: async () => ({ jobs: [] }),
+      resolveCronJobForAgent: () => null,
+      formatCronJobDisplay: () => "",
+      dispatchUpdateAgent,
+      isDisconnectLikeError: () => false,
+      logError: () => {},
+    });
+
+    const oldUpdate = operation.update(agent.agentId, agent, "heartbeat please");
+    operation.clearInFlight(agent.agentId);
+    await operation.update(agent.agentId, agent, "heartbeat please");
+
+    resolveOldHistory(
+      makeHistoryResult([
+        { role: "user", content: "Read HEARTBEAT.md if it exists" },
+        { role: "assistant", content: "stale response" },
+      ])
+    );
+    await oldUpdate;
+
+    expect(loadAgentHistoryWindow).toHaveBeenCalledTimes(2);
+    expect(dispatchUpdateAgent).toHaveBeenCalledTimes(1);
+    expect(dispatchUpdateAgent).toHaveBeenCalledWith(
+      agent.agentId,
+      buildLatestUpdatePatch("new response", "heartbeat")
+    );
+  });
+
+  it("invalidates pending async updates when a reset intent is applied", async () => {
+    const agent = makeAgent();
+    const resetAgent = makeAgent({
+      latestOverride: "old visible override",
+      latestOverrideKind: "heartbeat",
+    });
+
+    let resolveHistory!: (value: DomainAgentHistoryResult) => void;
+    const historyPromise = new Promise<DomainAgentHistoryResult>((resolve) => {
+      resolveHistory = resolve;
+    });
+
+    const loadAgentHistoryWindow = vi.fn(() => historyPromise);
+    const dispatchUpdateAgent = vi.fn();
+    const operation = createSpecialLatestUpdateOperation({
+      loadAgentHistoryWindow,
+      listCronJobs: async () => ({ jobs: [] }),
+      resolveCronJobForAgent: () => null,
+      formatCronJobDisplay: () => "",
+      dispatchUpdateAgent,
+      isDisconnectLikeError: () => false,
+      logError: () => {},
+    });
+
+    const pending = operation.update(agent.agentId, agent, "heartbeat please");
+    await operation.update(resetAgent.agentId, resetAgent, "plain user prompt");
+
+    resolveHistory(
+      makeHistoryResult([
+        { role: "user", content: "Read HEARTBEAT.md if it exists" },
+        { role: "assistant", content: "stale response" },
+      ])
+    );
+    await pending;
+
+    expect(loadAgentHistoryWindow).toHaveBeenCalledTimes(1);
+    expect(dispatchUpdateAgent).toHaveBeenCalledTimes(1);
+    expect(dispatchUpdateAgent).toHaveBeenCalledWith(
+      resetAgent.agentId,
+      buildLatestUpdatePatch("")
+    );
+  });
 });

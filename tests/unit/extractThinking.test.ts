@@ -5,6 +5,7 @@ import {
   extractThinkingFromTaggedStream,
   extractThinkingFromTaggedText,
   formatThinkingMarkdown,
+  hasUnclosedThinkingTag,
   isTraceMarkdown,
   stripTraceMarkdown,
 } from "@/lib/text/message-extract";
@@ -109,5 +110,26 @@ describe("extractThinkingFromTaggedText", () => {
 describe("extractThinkingFromTaggedStream", () => {
   it("extracts partial thinking from an open thinking tag", () => {
     expect(extractThinkingFromTaggedStream("Hello <think>Plan A so far")).toBe("Plan A so far");
+  });
+});
+
+describe("hasUnclosedThinkingTag", () => {
+  it("detects a stream with an open thinking tag", () => {
+    expect(hasUnclosedThinkingTag("Hello <thinking>Plan A so far")).toBe(true);
+  });
+
+  it("ignores a stream whose latest thinking tag is closed", () => {
+    expect(hasUnclosedThinkingTag("<thinking>Plan A</thinking>\nAnswer")).toBe(false);
+  });
+
+  it("detects a later open tag even after an earlier closed tag", () => {
+    expect(
+      hasUnclosedThinkingTag("<thinking>Plan A</thinking>\nAnswer <analysis>Next")
+    ).toBe(true);
+  });
+
+  it("uses the same hidden-thinking tag aliases as stream extraction", () => {
+    expect(hasUnclosedThinkingTag("Hello <antthinking>Plan A")).toBe(true);
+    expect(hasUnclosedThinkingTag("Hello <thought>Plan A</thought>")).toBe(false);
   });
 });

@@ -7,7 +7,10 @@ import {
   type SummaryStatusSnapshot,
 } from "@/features/agents/state/runtimeEventBridge";
 import type { AgentStoreSeed } from "@/features/agents/state/store";
-import { deriveHydrateAgentFleetResult } from "@/features/agents/operations/agentFleetHydrationDerivation";
+import {
+  deriveHydrateAgentFleetResult,
+  normalizeAgentsListResultForHydration,
+} from "@/features/agents/operations/agentFleetHydrationDerivation";
 
 type GatewayClientLike = {
   call: (method: string, params: unknown) => Promise<unknown>;
@@ -127,7 +130,8 @@ export async function hydrateAgentFleetFromGateway(params: {
     }
   }
 
-  const agentsResult = await callGateway<AgentsListResult>(params.client, "agents.list", {});
+  const agentsResultRaw = await callGateway<AgentsListResult>(params.client, "agents.list", {});
+  const agentsResult = normalizeAgentsListResultForHydration(agentsResultRaw);
   const mainKey = agentsResult.mainKey?.trim() || "main";
 
   const mainSessionKeyByAgent = new Map<string, SessionsListEntry | null>();

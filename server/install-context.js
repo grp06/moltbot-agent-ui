@@ -362,7 +362,7 @@ const normalizeDnsName = (value) => {
   return trimmed.replace(/\.$/, "");
 };
 
-const probeTailscale = async (env = process.env, runner = execFileAsync) => {
+const probeTailscale = async (runner = execFileAsync) => {
   const result = await runJsonCommand(
     "tailscale",
     ["status", "--json"],
@@ -436,7 +436,7 @@ async function detectInstallContext(env = process.env, options = {}) {
   const localDefaults = readOpenclawGatewayDefaultsImpl(env);
   const [localGatewayProbe, tailscale, studioCli] = await Promise.all([
     probeLocalGateway(runCommand),
-    probeTailscale(env, runCommand),
+    probeTailscale(runCommand),
     probeStudioCli(env, runCommand, fetchImpl),
   ]);
 

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { NextResponse } from "next/server";
 
 import { type StudioSettingsPatch } from "@/lib/studio/settings";
@@ -9,6 +11,7 @@ import {
 } from "@/lib/controlplane/runtime";
 import {
   applyStudioSettingsPatch,
+  loadPersistedStudioSettings,
   loadLocalGatewayDefaults,
   loadStudioSettings,
   redactLocalGatewayDefaultsSecrets,
@@ -19,7 +22,7 @@ import { detectInstallContext } from "../../../../server/install-context";
 export const runtime = "nodejs";
 
 const isPatch = (value: unknown): value is StudioSettingsPatch =>
-  Boolean(value && typeof value === "object");
+  Boolean(value && typeof value === "object" && !Array.isArray(value));
 
 type RuntimeReconnectMetadata = {
   attempted: boolean;
@@ -49,6 +52,16 @@ const gatewaySettingsChanged = (
 const hasGatewayConfiguration = (settings: ReturnType<typeof loadStudioSettings>) => {
   const gateway = normalizeGatewaySettings(settings);
   return Boolean(gateway.url && gateway.token);
+};
+
+const buildGatewayCredentialScope = (settings: ReturnType<typeof loadStudioSettings>) => {
+  const gateway = normalizeGatewaySettings(settings);
+  if (!gateway.url || !gateway.token) return "";
+  return createHash("sha256")
+    .update(gateway.url)
+    .update("\0")
+    .update(gateway.token)
+    .digest("hex");
 };
 
 const reconnectRuntimeForGatewaySettingsChange = async (
@@ -123,6 +136,7 @@ const reconnectRuntimeForGatewaySettingsChange = async (
 
 const buildSettingsResponseBody = async (metadata?: RuntimeReconnectMetadata | null) => {
   const settings = loadStudioSettings();
+  const persistedSettings = loadPersistedStudioSettings();
   const localGatewayDefaults = loadLocalGatewayDefaults();
   let installContext = defaultStudioInstallContext();
   try {
@@ -137,7 +151,8 @@ const buildSettingsResponseBody = async (metadata?: RuntimeReconnectMetadata | n
       hasToken: Boolean(localGatewayDefaults?.token?.trim()),
     },
     gatewayMeta: {
-      hasStoredToken: Boolean(settings.gateway?.token?.trim()),
+      hasStoredToken: Boolean(persistedSettings.gateway?.token?.trim()),
+      credentialScope: buildGatewayCredentialScope(settings),
     },
     installContext,
     domainApiModeEnabled: isStudioDomainApiModeEnabled(),
@@ -156,11 +171,17 @@ export async function GET() {
 }
 
 export async function PUT(request: Request) {
+  let body: unknown;
   try {
-    const body = (await request.json()) as unknown;
-    if (!isPatch(body)) {
-      return NextResponse.json({ error: "Invalid settings payload." }, { status: 400 });
-    }
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON payload." }, { status: 400 });
+  }
+  if (!isPatch(body)) {
+    return NextResponse.json({ error: "Invalid settings payload." }, { status: 400 });
+  }
+
+  try {
     const previousSettings = loadStudioSettings();
     const nextSettings = applyStudioSettingsPatch({
       ...body,

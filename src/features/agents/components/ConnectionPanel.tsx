@@ -1,4 +1,9 @@
 import type { GatewayStatus } from "@/lib/gateway/gateway-status";
+import {
+  canUseLocalGatewayDefaultsForUrl,
+  normalizeGatewayUrl,
+  type StudioGatewaySettings,
+} from "@/lib/studio/settings";
 import { X } from "lucide-react";
 import { resolveGatewayStatusBadgeClass, resolveGatewayStatusLabel } from "./colorSemantics";
 
@@ -7,6 +12,7 @@ type ConnectionPanelProps = {
   draftGatewayUrl: string;
   token: string;
   hasStoredToken: boolean;
+  localGatewayDefaults: StudioGatewaySettings | null;
   localGatewayDefaultsHasToken: boolean;
   hasUnsavedChanges: boolean;
   status: GatewayStatus;
@@ -34,6 +40,7 @@ export const ConnectionPanel = ({
   draftGatewayUrl,
   token,
   hasStoredToken,
+  localGatewayDefaults,
   localGatewayDefaultsHasToken,
   hasUnsavedChanges,
   status,
@@ -51,10 +58,16 @@ export const ConnectionPanel = ({
   onClose,
 }: ConnectionPanelProps) => {
   const actionBusy = saving || testing || disconnecting;
-  const tokenHelper = hasStoredToken
+  const localGatewayDefaultsApplyToDraft =
+    localGatewayDefaultsHasToken &&
+    canUseLocalGatewayDefaultsForUrl(draftGatewayUrl || savedGatewayUrl, localGatewayDefaults?.url);
+  const storedTokenAppliesToDraft =
+    hasStoredToken &&
+    normalizeGatewayUrl(draftGatewayUrl || savedGatewayUrl) === normalizeGatewayUrl(savedGatewayUrl);
+  const tokenHelper = storedTokenAppliesToDraft
     ? "Stored token available on this Studio host. Leave blank to keep it."
-    : localGatewayDefaultsHasToken
-      ? "A local OpenClaw token is available on this host. Leave blank to use it."
+    : localGatewayDefaultsApplyToDraft
+      ? "A local OpenClaw token is available for this localhost gateway. Leave blank to use it."
       : "Enter the token Studio should use for this upstream.";
 
   return (

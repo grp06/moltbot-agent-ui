@@ -1,3 +1,5 @@
+import { hasMalformedAgentSessionKey } from "@/lib/gateway/session-keys";
+
 type SessionSettingsPatchPayload = {
   key: string;
   model?: string | null;
@@ -45,6 +47,9 @@ export const syncGatewaySessionSettings = async ({
   const key = sessionKey.trim();
   if (!key) {
     throw new Error("Session key is required.");
+  }
+  if (hasMalformedAgentSessionKey(key)) {
+    throw new Error("Invalid sessionKey.");
   }
   const includeModel = model !== undefined;
   const includeThinkingLevel = thinkingLevel !== undefined;

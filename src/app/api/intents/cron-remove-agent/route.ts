@@ -1,8 +1,16 @@
 import { NextResponse } from "next/server";
 
+import { isSafeAgentId } from "@/lib/agents/agentIds";
 import { ensureDomainIntentRuntime, parseIntentBody } from "@/lib/controlplane/intent-route";
 import { ControlPlaneGatewayError } from "@/lib/controlplane/openclaw-adapter";
-import type { CronDelivery, CronJobRestoreInput, CronPayload, CronSchedule } from "@/lib/cron/types";
+import {
+  cronAgentIdsEqual,
+  resolveOptionalCronSessionKey,
+  type CronDelivery,
+  type CronJobRestoreInput,
+  type CronPayload,
+  type CronSchedule,
+} from "@/lib/cron/types";
 import type { ControlPlaneRuntime } from "@/lib/controlplane/runtime";
 
 export const runtime = "nodejs";
@@ -24,6 +32,11 @@ type CronJobSummaryLike = {
 
 type CronListResult = {
   jobs?: unknown;
+};
+
+type CronJobRemovalPlan = {
+  id: string;
+  restoreInput: CronJobRestoreInput;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -61,7 +74,11 @@ const parseCronJobRestoreInput = (
   if (!isRecord(payload)) {
     throw new Error(`Cron job ${id} is missing payload.`);
   }
-  const sessionKey = typeof value.sessionKey === "string" ? value.sessionKey : undefined;
+  const sessionKey = resolveOptionalCronSessionKey(
+    value.sessionKey,
+    expectedAgentId,
+    `Cron job ${id} sessionKey`
+  );
   const description = typeof value.description === "string" ? value.description : undefined;
   const deleteAfterRun = typeof value.deleteAfterRun === "boolean" ? value.deleteAfterRun : undefined;
   const delivery = isRecord(value.delivery) ? (value.delivery as CronDelivery) : undefined;
@@ -78,6 +95,20 @@ const parseCronJobRestoreInput = (
     wakeMode,
     payload: payload as CronPayload,
     ...(delivery ? { delivery } : {}),
+  };
+};
+
+const buildCronJobRemovalPlan = (
+  job: CronJobSummaryLike,
+  expectedAgentId: string
+): CronJobRemovalPlan => {
+  const id = typeof job.id === "string" ? job.id.trim() : "";
+  if (!id) {
+    throw new Error("Cron job id is required.");
+  }
+  return {
+    id,
+    restoreInput: parseCronJobRestoreInput(job, expectedAgentId),
   };
 };
 
@@ -129,6 +160,9 @@ export async function POST(request: Request) {
   if (!agentId) {
     return NextResponse.json({ error: "agentId is required." }, { status: 400 });
   }
+  if (!isSafeAgentId(agentId)) {
+    return NextResponse.json({ error: `Invalid agentId: ${agentId}` }, { status: 400 });
+  }
 
   const runtimeOrError = await ensureDomainIntentRuntime();
   if (runtimeOrError instanceof Response) {
@@ -142,36 +176,27 @@ export async function POST(request: Request) {
     const jobs = Array.isArray(listResult.jobs)
       ? listResult.jobs.filter((entry): entry is CronJobSummaryLike => isRecord(entry))
       : [];
-    const jobsForAgent = jobs.filter((job) => {
-      const jobAgentId = typeof job.agentId === "string" ? job.agentId.trim() : "";
-      return jobAgentId === agentId;
-    });
+    const jobsForAgent = jobs.filter((job) => cronAgentIdsEqual(job.agentId, agentId));
 
+    const jobsToRemove = jobsForAgent.map((job) => buildCronJobRemovalPlan(job, agentId));
     const removedJobs: CronJobRestoreInput[] = [];
-    for (const job of jobsForAgent) {
-      const jobId = typeof job.id === "string" ? job.id.trim() : "";
-      if (!jobId) {
-        throw new Error("Cron job id is required.");
-      }
+    try {
+      for (const job of jobsToRemove) {
+        const removeResult = await runtimeOrError.callGateway("cron.remove", { id: job.id });
 
-      let removeResult: unknown;
-      try {
-        removeResult = await runtimeOrError.callGateway("cron.remove", { id: jobId });
-      } catch (error) {
-        await restoreJobsBestEffort(runtimeOrError, removedJobs);
-        throw error;
-      }
+        const ok = isRecord(removeResult) && removeResult.ok === true;
+        if (!ok) {
+          throw new Error(`Failed to delete cron job \"${job.id}\".`);
+        }
 
-      const ok = isRecord(removeResult) && removeResult.ok === true;
-      if (!ok) {
-        await restoreJobsBestEffort(runtimeOrError, removedJobs);
-        throw new Error(`Failed to delete cron job \"${jobId}\".`);
+        const removed = isRecord(removeResult) && removeResult.removed === true;
+        if (removed) {
+          removedJobs.push(job.restoreInput);
+        }
       }
-
-      const removed = isRecord(removeResult) && removeResult.removed === true;
-      if (removed) {
-        removedJobs.push(parseCronJobRestoreInput(job, agentId));
-      }
+    } catch (error) {
+      await restoreJobsBestEffort(runtimeOrError, removedJobs);
+      throw error;
     }
 
     return NextResponse.json({

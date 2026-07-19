@@ -28,4 +28,23 @@ describe("media-markdown", () => {
     const out = rewriteMediaLinesToMarkdown(input);
     expect(out).toBe(input);
   });
+
+  it("leaves non-image MEDIA lines unchanged", () => {
+    const input = "Hello\nMEDIA: /tmp/report.txt\nDone";
+    const out = rewriteMediaLinesToMarkdown(input);
+    expect(out).toBe(input);
+  });
+
+  it("does not consume the next line when MEDIA: is followed by non-image text", () => {
+    const input = "Hello\nMEDIA:\n/tmp/report.txt\nDone";
+    const out = rewriteMediaLinesToMarkdown(input);
+    expect(out).toBe(input);
+  });
+
+  it("rewrites image paths with mixed-case extensions", () => {
+    const input = "MEDIA: /home/ubuntu/.openclaw/workspace-agent/foo.PNG";
+    const out = rewriteMediaLinesToMarkdown(input);
+    expect(out).toContain("![](/api/runtime/media?path=");
+    expect(out).toContain("MEDIA: /home/ubuntu/.openclaw/workspace-agent/foo.PNG");
+  });
 });

@@ -1,4 +1,5 @@
 import { GatewayResponseError, type GatewayClient } from "@/lib/gateway/GatewayClient";
+import { resolveSafeAgentId } from "@/lib/agents/agentIds";
 
 type GatewayExecApprovalSecurity = "deny" | "allowlist" | "full";
 type GatewayExecApprovalAsk = "off" | "on-miss" | "always";
@@ -67,20 +68,82 @@ const normalizeAllowlist = (patterns: Array<{ pattern: string }>): Array<{ patte
   return Array.from(new Set(next)).map((pattern) => ({ pattern }));
 };
 
+const resolveAgentId = (value: string) => {
+  const agentId = resolveSafeAgentId(value);
+  if (!agentId) {
+    const trimmed = value.trim();
+    throw new Error(trimmed ? `Invalid agentId: ${trimmed}` : "Agent id is required.");
+  }
+  return agentId;
+};
+
+const buildNextExecApprovalsFile = (params: {
+  snapshotFile?: ExecApprovalsFile;
+  agentId: string;
+  policy: {
+    security: GatewayExecApprovalSecurity;
+    ask: GatewayExecApprovalAsk;
+    allowlist: Array<{ pattern: string }>;
+  } | null;
+}): ExecApprovalsFile | null => {
+  const baseFile: ExecApprovalsFile =
+    params.snapshotFile && typeof params.snapshotFile === "object"
+      ? {
+          version: 1,
+          socket: params.snapshotFile.socket,
+          defaults: params.snapshotFile.defaults,
+          agents: { ...(params.snapshotFile.agents ?? {}) },
+        }
+      : { version: 1, agents: {} };
+
+  const nextAgents = { ...(baseFile.agents ?? {}) };
+  if (!params.policy) {
+    if (!(params.agentId in nextAgents)) {
+      return null;
+    }
+    delete nextAgents[params.agentId];
+  } else {
+    const existing = nextAgents[params.agentId] ?? {};
+    nextAgents[params.agentId] = {
+      ...existing,
+      security: params.policy.security,
+      ask: params.policy.ask,
+      allowlist: normalizeAllowlist(params.policy.allowlist),
+    };
+  }
+
+  return {
+    ...baseFile,
+    version: 1,
+    agents: nextAgents,
+  };
+};
+
 const setExecApprovalsWithRetry = async (params: {
   client: GatewayClient;
-  file: ExecApprovalsFile;
-  baseHash?: string | null;
-  exists?: boolean;
+  snapshot: ExecApprovalsSnapshot;
+  agentId: string;
+  policy: {
+    security: GatewayExecApprovalSecurity;
+    ask: GatewayExecApprovalAsk;
+    allowlist: Array<{ pattern: string }>;
+  } | null;
   attempt?: number;
 }): Promise<void> => {
   const attempt = params.attempt ?? 0;
-  const requiresBaseHash = params.exists !== false;
-  const baseHash = requiresBaseHash ? params.baseHash?.trim() : undefined;
+  const file = buildNextExecApprovalsFile({
+    snapshotFile: params.snapshot.file,
+    agentId: params.agentId,
+    policy: params.policy,
+  });
+  if (!file) return;
+
+  const requiresBaseHash = params.snapshot.exists !== false;
+  const baseHash = requiresBaseHash ? params.snapshot.hash?.trim() : undefined;
   if (requiresBaseHash && !baseHash) {
     throw new Error("Exec approvals hash unavailable; re-run exec.approvals.get.");
   }
-  const payload: Record<string, unknown> = { file: params.file };
+  const payload: Record<string, unknown> = { file };
   if (baseHash) payload.baseHash = baseHash;
   try {
     await callGateway(params.client, "exec.approvals.set", payload);
@@ -92,9 +155,10 @@ const setExecApprovalsWithRetry = async (params: {
         {}
       );
       return setExecApprovalsWithRetry({
-        ...params,
-        baseHash: snapshot.hash ?? undefined,
-        exists: snapshot.exists,
+        client: params.client,
+        snapshot,
+        agentId: params.agentId,
+        policy: params.policy,
         attempt: attempt + 1,
       });
     }
@@ -109,55 +173,20 @@ export async function upsertGatewayAgentExecApprovals(params: {
     security: GatewayExecApprovalSecurity;
     ask: GatewayExecApprovalAsk;
     allowlist: Array<{ pattern: string }>;
-  } | null;
+} | null;
 }): Promise<void> {
-  const agentId = params.agentId.trim();
-  if (!agentId) {
-    throw new Error("Agent id is required.");
-  }
+  const agentId = resolveAgentId(params.agentId);
 
   const snapshot = await callGateway<ExecApprovalsSnapshot>(
     params.client,
     "exec.approvals.get",
     {}
   );
-  const baseFile: ExecApprovalsFile =
-    snapshot.file && typeof snapshot.file === "object"
-      ? {
-          version: 1,
-          socket: snapshot.file.socket,
-          defaults: snapshot.file.defaults,
-          agents: { ...(snapshot.file.agents ?? {}) },
-        }
-      : { version: 1, agents: {} };
-
-  const nextAgents = { ...(baseFile.agents ?? {}) };
-  if (!params.policy) {
-    if (!(agentId in nextAgents)) {
-      return;
-    }
-    delete nextAgents[agentId];
-  } else {
-    const existing = nextAgents[agentId] ?? {};
-    nextAgents[agentId] = {
-      ...existing,
-      security: params.policy.security,
-      ask: params.policy.ask,
-      allowlist: normalizeAllowlist(params.policy.allowlist),
-    };
-  }
-
-  const nextFile: ExecApprovalsFile = {
-    ...baseFile,
-    version: 1,
-    agents: nextAgents,
-  };
-
   await setExecApprovalsWithRetry({
     client: params.client,
-    file: nextFile,
-    baseHash: snapshot.hash,
-    exists: snapshot.exists,
+    snapshot,
+    agentId,
+    policy: params.policy,
   });
 }
 
@@ -169,10 +198,7 @@ export async function readGatewayAgentExecApprovals(params: {
   ask: GatewayExecApprovalAsk | null;
   allowlist: Array<{ pattern: string }>;
 } | null> {
-  const agentId = params.agentId.trim();
-  if (!agentId) {
-    throw new Error("Agent id is required.");
-  }
+  const agentId = resolveAgentId(params.agentId);
 
   const snapshot = await callGateway<ExecApprovalsSnapshot>(
     params.client,

@@ -163,4 +163,44 @@ describe("deriveHydrateAgentFleetResult", () => {
     expect(result.summaryPatches.length).toBeGreaterThan(0);
     expect(result.suggestedSelectedAgentId).toBe("agent-2");
   });
+
+  it("drops malformed and duplicate gateway agent ids before deriving seeds", () => {
+    const result = deriveHydrateAgentFleetResult({
+      gatewayUrl: "ws://127.0.0.1:18789",
+      configSnapshot: null,
+      settings: null,
+      execApprovalsSnapshot: {
+        file: {
+          agents: {
+            "../agent-1": { security: "full", ask: "always" },
+            " agent-1 ": { security: "allowlist", ask: "on-miss" },
+          },
+        },
+      },
+      agentsResult: {
+        defaultId: "../agent-1",
+        mainKey: "main",
+        agents: [
+          { id: "../agent-1", name: "Bad", identity: {} },
+          { id: " agent-1 ", name: "One", identity: {} },
+          { id: "AGENT-1", name: "Duplicate", identity: {} },
+        ],
+      },
+      mainSessionByAgentId: new Map([["agent-1", { key: "agent:agent-1:main" }]]),
+      statusSummary: null,
+      previewResult: null,
+    });
+
+    expect(result.seeds).toEqual([
+      expect.objectContaining({
+        agentId: "agent-1",
+        name: "One",
+        sessionKey: "agent:agent-1:main",
+        sessionExecHost: "gateway",
+        sessionExecSecurity: "allowlist",
+        sessionExecAsk: "on-miss",
+      }),
+    ]);
+    expect(result.sessionCreatedAgentIds).toEqual(["agent-1"]);
+  });
 });

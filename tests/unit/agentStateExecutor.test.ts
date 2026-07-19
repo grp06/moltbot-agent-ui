@@ -34,6 +34,8 @@ describe("agent state ssh executor", () => {
     );
     const call = mockedRunSshJson.mock.calls[0]?.[0];
     expect(call?.input).toContain("workspace-{agent_id}");
+    expect(call?.input).toContain("rollback_moves");
+    expect(call?.input).toContain("Rollback also failed");
   });
 
   it("restores agent state via ssh", () => {
@@ -55,5 +57,14 @@ describe("agent state ssh executor", () => {
         input: expect.stringContaining('python3 - "$1" "$2"'),
       })
     );
+    const call = mockedRunSshJson.mock.calls[0]?.[0];
+    expect(call?.input).toContain("Refusing to restore source outside trashDir");
+    expect(call?.input).toContain("Refusing to restore symlink outside stateDir");
+    expect(call?.input).toContain("resolve_restored_symlink_target(dest, os.readlink(src))");
+    expect(call?.input).toContain('trash_root = base / "trash" / "studio-delete-agent"');
+    expect(call?.input).toContain("trashDir is not under {trash_root}");
+    expect(call?.input).not.toMatch(/^\t/m);
+    expect(call?.input).toContain("rollback_moves");
+    expect(call?.input).toContain("Rollback also failed");
   });
 });
