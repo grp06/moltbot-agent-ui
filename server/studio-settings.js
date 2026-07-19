@@ -65,7 +65,8 @@ const writeJsonFileAtomic = (filePath, value) => {
 const DEFAULT_GATEWAY_URL = "ws://localhost:18789";
 const OPENCLAW_CONFIG_FILENAME = "openclaw.json";
 
-const isRecord = (value) => Boolean(value && typeof value === "object" && !Array.isArray(value));
+const isRecord = (value) =>
+  Boolean(value && typeof value === "object" && !Array.isArray(value));
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "0.0.0.0"]);
 
 const normalizeParsedHostname = (value) =>
@@ -88,11 +89,28 @@ const normalizeGatewayUrl = (value) => {
         : "";
     const host = parsed.port ? `localhost:${parsed.port}` : "localhost";
     const dropDefaultPath =
-      parsed.pathname === "/" && !url.endsWith("/") && !parsed.search && !parsed.hash;
+      parsed.pathname === "/" &&
+      !url.endsWith("/") &&
+      !parsed.search &&
+      !parsed.hash;
     const pathname = dropDefaultPath ? "" : parsed.pathname;
     return `${parsed.protocol}//${auth}${host}${pathname}${parsed.search}${parsed.hash}`;
   } catch {
     return url;
+  }
+};
+
+const isValidGatewayUrl = (value) => {
+  const url = String(value ?? "").trim();
+  if (!url) return false;
+  try {
+    const parsed = new URL(url);
+    return (
+      (parsed.protocol === "ws:" || parsed.protocol === "wss:") &&
+      Boolean(parsed.hostname)
+    );
+  } catch {
+    return false;
   }
 };
 
@@ -114,7 +132,9 @@ const readOpenclawGatewayDefaults = (env = process.env) => {
     const auth = isRecord(gateway.auth) ? gateway.auth : null;
     const token = typeof auth?.token === "string" ? auth.token.trim() : "";
     const port =
-      typeof gateway.port === "number" && Number.isFinite(gateway.port) ? gateway.port : null;
+      typeof gateway.port === "number" && Number.isFinite(gateway.port)
+        ? gateway.port
+        : null;
     if (!token) return null;
     const url = port ? `ws://localhost:${port}` : "";
     if (!url) return null;
@@ -145,6 +165,7 @@ const loadUpstreamGatewaySettings = (env = process.env) => {
 };
 
 module.exports = {
+  isValidGatewayUrl,
   resolveStudioSettingsPath,
   loadUpstreamGatewaySettings,
   readOpenclawGatewayDefaults,
