@@ -1,11 +1,13 @@
 export type StudioGatewaySettings = {
   url: string;
   token: string;
+  allowSelfSignedCerts?: boolean;
 };
 
 type StudioGatewaySettingsPatch = {
   url?: string | null;
   token?: string | null;
+  allowSelfSignedCerts?: boolean | null;
 };
 
 type FocusFilter = "all" | "running" | "approvals";
@@ -141,7 +143,8 @@ const normalizeGatewaySettings = (value: unknown): StudioGatewaySettings | null 
   const url = normalizeGatewayUrl(value.url);
   if (!url) return null;
   const token = coerceString(value.token);
-  return { url, token };
+  const allowSelfSignedCerts = value.allowSelfSignedCerts === true;
+  return { url, token, allowSelfSignedCerts };
 };
 
 const hasOwn = (value: Record<string, unknown>, key: string) =>
@@ -164,8 +167,13 @@ const mergeGatewaySettings = (
     : patchHasUrl && !sameGatewayUrl
       ? ""
       : current?.token ?? "";
+  const nextAllowSelfSignedCerts = hasOwn(patch, "allowSelfSignedCerts")
+    ? typeof patch.allowSelfSignedCerts === "boolean"
+      ? patch.allowSelfSignedCerts
+      : false
+    : current?.allowSelfSignedCerts ?? false;
   if (!nextUrl) return null;
-  return { url: nextUrl, token: nextToken };
+  return { url: nextUrl, token: nextToken, allowSelfSignedCerts: nextAllowSelfSignedCerts };
 };
 
 const normalizeFocused = (value: unknown): Record<string, StudioFocusedPreference> => {

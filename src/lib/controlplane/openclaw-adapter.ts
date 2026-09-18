@@ -173,13 +173,14 @@ const loadGatewaySettings = (): ControlPlaneGatewaySettings => {
   const gateway = settings.gateway;
   const url = typeof gateway?.url === "string" ? gateway.url.trim() : "";
   const token = typeof gateway?.token === "string" ? gateway.token.trim() : "";
+  const allowSelfSignedCerts = gateway?.allowSelfSignedCerts === true;
   if (!url) {
     throw new Error("Control-plane start failed: Studio gateway URL is not configured.");
   }
   if (!token) {
     throw new Error("Control-plane start failed: Studio gateway token is not configured.");
   }
-  return { url, token };
+  return { url, token, allowSelfSignedCerts };
 };
 
 export type OpenClawAdapterOptions = {
@@ -212,7 +213,16 @@ export class OpenClawGatewayAdapter {
 
   constructor(options?: OpenClawAdapterOptions) {
     this.loadSettings = options?.loadSettings ?? loadGatewaySettings;
-    this.createWebSocket = options?.createWebSocket ?? ((url, opts) => new WebSocket(url, opts));
+    this.createWebSocket = options?.createWebSocket ?? ((url, opts) => {
+      const wsOptions: any = {};
+      if (opts.origin) {
+        wsOptions.origin = opts.origin;
+      }
+      if (opts.rejectUnauthorized === false) {
+        wsOptions.rejectUnauthorized = false;
+      }
+      return new WebSocket(url, wsOptions);
+    });
     this.methodAllowlist = options?.methodAllowlist ?? DEFAULT_METHOD_ALLOWLIST;
     this.onDomainEvent = options?.onDomainEvent;
   }
@@ -351,6 +361,7 @@ export class OpenClawGatewayAdapter {
       token: settings.token,
       protocol: CONNECT_PROTOCOL,
       capabilities: CONNECT_CAPABILITIES,
+      rejectUnauthorized: settings.allowSelfSignedCerts ? false : undefined,
     });
     const connectionEpoch = randomUUID();
     this.connectionEpoch = connectionEpoch;

@@ -2,6 +2,7 @@ export type GatewayConnectProfileId = "backend-local" | "legacy-control-ui";
 
 export type GatewaySocketOptions = {
   origin?: string;
+  rejectUnauthorized?: boolean;
 };
 
 export type GatewayConnectProfile = {
@@ -80,6 +81,7 @@ export function buildGatewayConnectProfile(args: {
   token: string;
   protocol: number;
   capabilities: string[];
+  rejectUnauthorized?: boolean;
 }): GatewayConnectProfile {
   const baseParams = {
     minProtocol: args.protocol,
@@ -90,10 +92,20 @@ export function buildGatewayConnectProfile(args: {
     auth: { token: args.token },
   };
 
+  const socketOptions: GatewaySocketOptions = {};
+
+  if (args.profileId === "legacy-control-ui") {
+    socketOptions.origin = resolveOriginForUpstream(args.upstreamUrl);
+  }
+
+  if (args.rejectUnauthorized === false) {
+    socketOptions.rejectUnauthorized = false;
+  }
+
   if (args.profileId === "legacy-control-ui") {
     return {
       id: args.profileId,
-      socketOptions: { origin: resolveOriginForUpstream(args.upstreamUrl) },
+      socketOptions,
       connectParams: {
         ...baseParams,
         client: {
@@ -108,7 +120,7 @@ export function buildGatewayConnectProfile(args: {
 
   return {
     id: args.profileId,
-    socketOptions: {},
+    socketOptions,
     connectParams: {
       ...baseParams,
       client: {
